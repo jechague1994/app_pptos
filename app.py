@@ -1,79 +1,70 @@
 import streamlit as st
 import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
 
-# 1. Configuración de la página
-st.set_page_config(page_title="Grupo Magallan | Gestión", layout="wide", page_icon="🏗️")
-
+# Configuración inicial
+st.set_page_config(page_title="Grupo Magallan", layout="wide")
 st.title("🏗️ Panel de Gestión Operativa - Grupo Magallan")
 
-# ID de tu Spreadsheet (confirmado en tus capturas)
-SHEET_ID = "1Bf2R7v_f-2_uV2M7uXq7y65oE9e_qV2M7uXq7y65oE9"
+# 1. Configurar Credenciales desde st.secrets
+scope = ["https://www.googleapis.com/auth/spreadsheets"]
+creds_dict = st.secrets["gcp_service_account"]
+credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+client = gspread.authorize(credentials)
 
-@st.cache_data(ttl=30)
-def cargar_csv(sheet_name):
-    # Formato de URL para exportar pestañas específicas como CSV
-    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-    try:
-        df = pd.read_csv(url)
-        # Normalizar nombres de columnas a minúsculas y sin espacios
-        df.columns = [str(c).strip().lower() for c in df.columns]
-        return df
-    except Exception as e:
-        return None
+# 2. Abrir el archivo por su nombre exacto
+SHEET_NAME = "Gestion_Magallan"
 
-# Intentamos cargar con los nombres exactos de tus fotos
-df_proyectos = cargar_csv("Proyectos")
-df_logistica = cargar_csv("Logistica")
-df_chat = cargar_csv("Chat_Interno")
-
-# Verificación de carga
-if df_proyectos is not None and not df_proyectos.empty:
-    st.sidebar.success("✅ Conexión Exitosa")
+@st.cache_data(ttl=60)
+def cargar_todo():
+    sh = client.open(SHEET_NAME)
     
-    # Selector de presupuesto
-    col_id = "nro_ppto"
-    if col_id in df_proyectos.columns:
-        lista_ppto = df_proyectos[col_id].unique()
-        ppto_sel = st.sidebar.selectbox("Seleccione Nro de Presupuesto:", lista_ppto)
-        
-        # Filtrado de datos
-        datos_p = df_proyectos[df_proyectos[col_id] == ppto_sel].iloc[0]
-        
-        # --- INTERFAZ ---
-        tab1, tab2, tab3 = st.tabs(["📊 Fabricación", "🚚 Logística", "💬 Chat"])
+    # Cargar cada pestaña
+    p = pd.DataFrame(sh.worksheet("Proyectos").get_all_records())
+    l = pd.DataFrame(sh.worksheet("Logistica").get_all_records())
+    c = pd.DataFrame(sh.worksheet("Chat_Interno").get_all_records())
+    
+    # Limpiar columnas
+    for df in [p, l, c]:
+        df.columns = [col.strip().lower() for col in df.columns]
+    return p, l, c
 
-        with tab1:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Datos del Cliente")
-                st.write(f"*Cliente:* {datos_p.get('cliente', 'N/A')}")
-                st.write(f"*Estado:* {datos_p.get('estado_fabricacion', 'N/A')}")
-            with c2:
-                st.subheader("Saldos")
-                total = float(datos_p.get('monto_total_ars', 0))
-                pagado = float(datos_p.get('pagado_ars', 0))
-                st.metric("Saldo Pendiente", f"$ {total - pagado:,.2f}")
+try:
+    df_p, df_l, df_c = cargar_todo()
+    
+    # Sidebar
+    st.sidebar.success("✅ Conectado")
+    ppto_sel = st.sidebar.selectbox("Seleccione Presupuesto:", df_p["nro_ppto"].unique())
+    
+    # Datos filtrados
+    resumen = df_p[df_p["nro_ppto"] == ppto_sel].iloc[0]
 
-        with tab2:
-            if df_logistica is not None and ppto_sel in df_logistica[col_id].values:
-                datos_l = df_logistica[df_logistica[col_id] == ppto_sel].iloc[0]
-                st.write(f"*Técnicos:* {datos_l.get('tecnicos', 'Pendiente')}")
-                st.write(f"*Fecha:* {datos_l.get('fecha_instalacion', 'Sin fecha')}")
-                st.info(f"*Estado Entrega:* {datos_l.get('estado_entrega', '-')}")
-            else:
-                st.warning("No se encontraron datos en la pestaña 'Logistica'.")
+    # Tabs
+    t1, t2, t3 = st.tabs(["📊 Fabricación", "🚚 Logística", "💬 Chat"])
 
-        with tab3:
-            if df_chat is not None:
-                mensajes = df_chat[df_chat[col_id].astype(str) == str(ppto_sel)]
-                if not mensajes.empty:
-                    for _, m in mensajes.iterrows():
-                        with st.chat_message("user"):
-                            st.write(f"*{m.get('usuario', 'Admin')}*: {m.get('mensaje', '')}")
-                else:
-                    st.write("Sin mensajes para este presupuesto.")
-    else:
-        st.error(f"No se encontró la columna '{col_id}' en la pestaña Proyectos.")
-else:
-    st.error("No se pudo leer la pestaña 'Proyectos'.")
-    st.info("Asegúrate de haber ido a Archivo > Compartir > Publicar en la Web en tu Google Sheets.")
+    with t1:
+        st.subheader(f"Cliente: {resumen['cliente']}")
+        c1, c2 = st.columns(2)
+        c1.metric("Estado", resumen['estado_fabricacion'])
+        total = float(resumen['monto_total_ars'])
+        pagado = float(resumen['pagado_ars'])
+        c2.metric("Saldo Pendiente", f"$ {total - pagado:,.2f}")
+
+    with t2:
+        if ppto_sel in df_l["nro_ppto"].values:
+            log = df_l[df_l["nro_ppto"] == ppto_sel].iloc[0]
+            st.write(f"*Técnicos:* {log['tecnicos']}")
+            st.info(f"*Fecha:* {log['fecha_instalacion']}")
+        else:
+            st.warning("Sin datos de logística.")
+
+    with t3:
+        chat = df_c[df_c["nro_ppto"].astype(str) == str(ppto_sel)]
+        for _, m in chat.iterrows():
+            with st.chat_message("user"):
+                st.write(f"*{m['usuario']}*: {m['mensaje']}")
+
+except Exception as e:
+    st.error(f"Error crítico: {e}")
+    st.info("Asegúrate de que el archivo de Google Sheets se llame exactamente 'Gestion_Magallan'.")
