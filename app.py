@@ -5,48 +5,19 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime, date
 import plotly.express as px
 
-# 1. CONFIGURACIÓN Y ESTILO
-st.set_page_config(page_title="Magallan Pro", layout="wide")
+# 1. CONFIGURACIÓN Y ESTILO PROFESIONAL
+st.set_page_config(page_title="Grupo Magallan | Sistema Integral", layout="wide")
 
 st.markdown("""
     <style>
-    html, body, [class*="st-"] { font-size: 1.1rem !important; }
-    .stButton>button {
-        width: 100%; height: 60px; font-size: 1.3rem !important;
-        background-color: #1E3A8A !important; color: white !important; border-radius: 10px;
-    }
-    .card-atraso { 
-        background-color: #FEF2F2; border-left: 10px solid #EF4444; 
-        padding: 15px; border-radius: 8px; color: #991B1B; margin-bottom: 10px;
-    }
-    .metric-container {
-        background-color: #F0F9FF; padding: 20px; border-radius: 15px;
-        border: 1px solid #BAE6FD; text-align: center; margin-bottom: 20px;
-    }
+    html, body, [class*="st-"] { font-size: 1.05rem !important; }
+    .stButton>button { width: 100%; height: 50px; border-radius: 10px; background-color: #1E3A8A; color: white; }
+    .chat-box { background-color: #F3F4F6; padding: 10px; border-radius: 10px; margin-bottom: 5px; border-left: 5px solid #1E3A8A; }
+    .metric-card { background-color: #EFF6FF; padding: 15px; border-radius: 10px; border: 1px solid #DBEAFE; text-align: center; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. LOGIN
-def check_auth():
-    if "authenticated" not in st.session_state:
-        st.title("🏗️ Grupo Magallan | Acceso")
-        try:
-            usuarios_dict = st.secrets["usuarios"]
-            u = st.selectbox("👤 Usuario", ["---"] + list(usuarios_dict.keys()))
-            p = st.text_input("🔑 Contraseña", type="password")
-            if st.button("INGRESAR"):
-                if u != "---" and str(usuarios_dict[u]).strip() == p.strip():
-                    st.session_state["authenticated"] = True
-                    st.session_state["user"] = u
-                    st.rerun()
-                else:
-                    st.error("Datos incorrectos.")
-        except:
-            st.error("Error en Secrets.")
-        return False
-    return True
-
-# 3. CARGA SEGURA
+# 2. CONEXIÓN Y CARGA (Sincronizado con tus pestañas reales)
 @st.cache_resource
 def conectar():
     return gspread.authorize(Credentials.from_service_account_info(
@@ -54,94 +25,126 @@ def conectar():
         scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     ))
 
-@st.cache_data(ttl=300)
-def cargar_datos():
+def cargar_datos(pestaña):
     try:
         sh = conectar().open("Gestion_Magallan")
-        def proc(h):
-            df = pd.DataFrame(sh.worksheet(h).get_all_records()).astype(str)
-            df.columns = [str(c).strip().lower().replace(' ', '_') for c in df.columns]
-            return df
-        return proc("Proyectos"), proc("Historial"), datetime.now().strftime("%H:%M")
+        df = pd.DataFrame(sh.worksheet(pestaña).get_all_records())
+        return df
     except:
-        return pd.DataFrame(), pd.DataFrame(), "Error"
+        return pd.DataFrame()
 
-if check_auth():
-    df_p, df_h, h_sincro = cargar_datos()
-
-    # --- SIDEBAR ---
-    st.sidebar.markdown(f"### 👤 {st.session_state['user']}")
-    if st.sidebar.button("🔄 RECONECTAR SISTEMA"):
-        st.cache_data.clear()
-        st.rerun()
-    opcion = st.sidebar.radio("IR A:", ["📊 TABLERO", "📈 ESTADÍSTICAS", "📝 GESTIÓN"])
+# 3. SISTEMA DE ACCESO
+if "authenticated" not in st.session_state:
+    st.title("🏗️ Grupo Magallan | Acceso")
+    u = st.selectbox("Usuario", ["---"] + list(st.secrets["usuarios"].keys()))
+    p = st.text_input("Contraseña", type="password")
+    if st.button("INGRESAR"):
+        if u != "---" and str(st.secrets["usuarios"][u]).strip() == p.strip():
+            st.session_state.update({"authenticated": True, "user": u})
+            st.rerun()
+else:
+    # --- MENÚ LATERAL ---
+    st.sidebar.title(f"👤 {st.session_state['user']}")
+    opcion = st.sidebar.radio("MENÚ PRINCIPAL", ["📊 TABLERO", "🆕 NUEVO PPTO", "🚚 LOGÍSTICA", "💬 CHAT", "📈 RENDIMIENTO"])
+    
     if st.sidebar.button("Cerrar Sesión"):
         del st.session_state["authenticated"]
         st.rerun()
 
-    # --- TABLERO (CON CORRECCIÓN DE KEYERROR) ---
+    # --- 1. TABLERO CON BUSCADOR DINÁMICO ---
     if opcion == "📊 TABLERO":
         st.title("📊 Control de Planta")
+        df_p = cargar_datos("Proyectos")
         
-        # Corrección del error de la línea 93
-        if not df_h.empty and 'detalle' in df_h.columns and 'fecha_hora' in df_h.columns:
-            hoy_str = date.today().strftime("%d/%m/%Y")
-            # Limpiamos fechas para evitar el TypeError
-            df_h['f_limpia'] = pd.to_datetime(df_h['fecha_hora'], dayfirst=True, errors='coerce').dt.strftime("%d/%m/%Y")
-            terminados = len(df_h[(df_h['f_limpia'] == hoy_str) & (df_h['detalle'].str.contains("Terminado|Entregado", case=False))])
-            
-            st.markdown(f"""
-                <div class="metric-container">
-                    <h2 style="margin:0; color:#0369A1;">🚀 Hoy: {terminados} Obras Finalizadas</h2>
-                </div>
-            """, unsafe_allow_html=True)
-
         if not df_p.empty:
-            df_p['f_dt'] = pd.to_datetime(df_p['fecha_entrega'], errors='coerce').dt.date
-            atrasos = df_p[(df_p['f_dt'] < date.today()) & (df_p['estado_fabricacion'].str.lower() != "entregado")]
-            for _, r in atrasos.iterrows():
-                st.markdown(f"<div class='card-atraso'>🚨 {r['cliente']} - Venció: {r['fecha_entrega']}</div>", unsafe_allow_html=True)
-            st.dataframe(df_p[['nro_ppto', 'cliente', 'estado_fabricacion', 'fecha_entrega']], use_container_width=True)
-
-    # --- ESTADÍSTICAS (CON CORRECCIÓN DE TYPEERROR) ---
-    elif opcion == "📈 ESTADÍSTICAS":
-        st.title("📈 Rendimiento")
-        if not df_h.empty:
-            # Forzamos conversión a 'date' para evitar el error de la captura
-            df_h['f_dt'] = pd.to_datetime(df_h['fecha_hora'], dayfirst=True, errors='coerce').dt.date
+            # Buscador integrado
+            busqueda = st.text_input("🔍 Buscar por Cliente o Nro_Ppto:", placeholder="Ej: Jonathan o 1001")
             
-            c1, c2 = st.columns(2)
-            f_ini = c1.date_input("Desde:", value=date(2024, 1, 1))
-            f_fin = c2.date_input("Hasta:", value=date.today())
-            
-            # Filtramos eliminando nulos para que la comparación no falle
-            df_f = df_h.dropna(subset=['f_dt'])
-            df_f = df_f[(df_f['f_dt'] >= f_ini) & (df_f['f_dt'] <= f_fin)]
-            
-            if not df_f.empty and 'usuario' in df_f.columns:
-                st.plotly_chart(px.pie(df_f, names='usuario', hole=0.3), use_container_width=True)
+            # Filtro lógico
+            if busqueda:
+                df_mostrar = df_p[
+                    df_p['Cliente'].astype(str).str.contains(busqueda, case=False) | 
+                    df_p['Nro_Ppto'].astype(str).str.contains(busqueda, case=False)
+                ]
             else:
-                st.info("Sin datos para este rango.")
+                df_mostrar = df_p
 
-    # --- GESTIÓN ---
-    elif opcion == "📝 GESTIÓN":
-        st.title("📝 Actualizar Obra")
-        if not df_p.empty:
-            busq = st.text_input("🔍 Buscar Cliente:").lower()
-            df_p['ref'] = df_p['nro_ppto'] + " - " + df_p['cliente']
-            lista = [o for o in df_p['ref'].unique() if busq in o.lower()]
-            sel = st.selectbox("Obra:", ["---"] + lista)
-            if sel != "---":
-                id_o = sel.split(" - ")[0]
-                with st.form("upd"):
-                    nuevo = st.selectbox("Estado:", ["Esperando", "Preparacion", "Terminado", "Entregado"])
-                    if st.form_submit_button("GUARDAR"):
-                        sh = conectar().open("Gestion_Magallan")
-                        fila = df_p[df_p['nro_ppto'] == id_o].index[0] + 2
-                        sh.worksheet("Proyectos").update_cell(fila, 3, nuevo)
-                        # Importante: Asegúrate de que tu hoja Historial tenga estas 4 columnas:
-                        # nro_ppto | fecha_hora | usuario | detalle
-                        sh.worksheet("Historial").append_row([id_o, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], f"Cambio a {nuevo}"])
+            st.markdown(f'<div class="metric-card"><h3>Obras Visibles: {len(df_mostrar)}</h3></div>', unsafe_allow_html=True)
+            st.divider()
+            st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
+        else:
+            st.warning("No hay datos en 'Proyectos'.")
+
+    # --- 2. NUEVO PPTO (SEGÚN TU ESTRUCTURA) ---
+    elif opcion == "🆕 NUEVO PPTO":
+        st.title("🆕 Carga de Proyecto")
+        with st.form("form_carga"):
+            c1, c2, c3 = st.columns(3)
+            nro = c1.text_input("Nro_Ppto")
+            cliente = c2.text_input("Cliente")
+            monto = c3.number_input("Monto_Total_Ars", min_value=0)
+            
+            c4, c5, c6 = st.columns(3)
+            estado = c4.selectbox("Estado_Fabricacion", ["Esperando", "Preparacion", "Terminado", "Entregado"])
+            fecha_e = c5.date_input("Fecha_Entrega")
+            iva = c6.selectbox("IVA", ["sin iva", "iva 10.5%", "iva 21%"])
+            
+            notas = st.text_area("Materiales_Pendientes")
+            
+            if st.form_submit_button("REGISTRAR"):
+                sh = conectar().open("Gestion_Magallan")
+                # Coincide con: Nro_Ppto, Cliente, Estado_Fabricacion, Fecha_Carga, Fecha_Entrega, Monto_Total_Ars, Pagado_Ars, IVA, Notas_Planta, Materiales_Pendientes
+                nueva_fila = [nro, cliente, estado, datetime.now().strftime("%d/%m/%Y"), fecha_e.strftime("%d/%m/%Y"), monto, 0, iva, "", notas]
+                sh.worksheet("Proyectos").append_row(nueva_fila)
+                sh.worksheet("Historial").append_row([nro, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], "Alta de cortina"])
+                st.success("✅ Guardado.")
+                st.cache_data.clear()
+
+    # --- 3. LOGÍSTICA (INSTALADORES) ---
+    elif opcion == "🚚 LOGÍSTICA":
+        st.title("🚚 Instalaciones")
+        df_l = cargar_datos("Logistica")
+        if not df_l.empty:
+            st.dataframe(df_l, use_container_width=True, hide_index=True)
+            with st.expander("➕ Cargar Movimiento de Logística"):
+                with st.form("f_log"):
+                    nro_l = st.text_input("Nro_Ppto")
+                    tec = st.selectbox("Tecnicos", ["Irving", "Equipo A", "Equipo B"])
+                    f_inst = st.date_input("Fecha_Instalacion")
+                    est_ent = st.selectbox("Estado_Entrega", ["Pendiente", "Esperando", "Terminado"])
+                    if st.form_submit_button("GUARDAR LOGÍSTICA"):
+                        conectar().open("Gestion_Magallan").worksheet("Logistica").append_row([nro_l, tec, f_inst.strftime("%d/%m/%Y"), est_ent])
                         st.cache_data.clear()
-                        st.success("¡Guardado!")
                         st.rerun()
+
+    # --- 4. CHAT INTERNO (POR PPTO) ---
+    elif opcion == "💬 CHAT":
+        st.title("💬 Chat de Equipo")
+        df_c = cargar_datos("Chat_Interno")
+        with st.form("chat_f", clear_on_submit=True):
+            nro_p = st.text_input("Nro_Ppto")
+            msg = st.text_input("Mensaje:")
+            if st.form_submit_button("Enviar"):
+                if msg:
+                    # Captura: Nro_Ppto, Usuario, Fecha_Hora, Mensaje
+                    conectar().open("Gestion_Magallan").worksheet("Chat_Interno").append_row([nro_p, st.session_state['user'], datetime.now().strftime("%d/%m/%Y %H:%M"), msg])
+                    st.cache_data.clear()
+                    st.rerun()
+        if not df_c.empty:
+            for _, r in df_c.iloc[::-1].iterrows():
+                st.markdown(f"<div class='chat-box'><small>{r['Fecha_Hora']} - {r['Usuario']} (Ppto: {r['Nro_Ppto']})</small><br>{r['Mensaje']}</div>", unsafe_allow_html=True)
+
+    # --- 5. RENDIMIENTO (ESTADÍSTICAS SIN ERRORES) ---
+    elif opcion == "📈 RENDIMIENTO":
+        st.title("📈 Análisis de Equipo")
+        df_h = cargar_datos("Historial")
+        if not df_h.empty:
+            # Corrección de TypeError en fechas
+            df_h['f_dt'] = pd.to_datetime(df_h['Fecha_Hora'], dayfirst=True, errors='coerce').dt.date
+            c1, c2 = st.columns(2)
+            f_ini = c1.date_input("Desde", value=date(2024, 1, 1))
+            f_fin = c2.date_input("Hasta", value=date.today())
+            df_f = df_h[(df_h['f_dt'] >= f_ini) & (df_h['f_dt'] <= f_fin)].dropna(subset=['f_dt'])
+            if not df_f.empty:
+                st.plotly_chart(px.pie(df_f, names='Usuario', hole=0.3))
+                st.table(df_f['Usuario'].value_counts())
