@@ -3,26 +3,22 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, date
+import plotly.express as px
 
 # 1. CONFIGURACIÓN Y ESTILO
-st.set_page_config(page_title="Grupo Magallan | Gestión Unificada", layout="wide")
+st.set_page_config(page_title="Grupo Magallan | Sistema Total", layout="wide")
 st.markdown("""
     <style>
-    .stTabs [data-baseweb="tab-list"] { gap: 20px; }
-    .stTabs [data-baseweb="tab"] { 
-        height: 50px; background-color: #F1F5F9; border-radius: 8px; padding: 10px 20px; 
-    }
+    html, body, [class*="st-"] { font-size: 1.05rem !important; }
+    .stTabs [data-baseweb="tab-list"] { gap: 15px; }
+    .stTabs [data-baseweb="tab"] { height: 45px; background-color: #F1F5F9; border-radius: 5px; }
     .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
-    .header-box { 
-        background-color: #1E3A8A; color: white; padding: 25px; border-radius: 12px; margin-bottom: 25px; 
-    }
-    .chat-bubble { 
-        background: #F8FAFC; padding: 12px; border-radius: 10px; margin-bottom: 8px; border-left: 5px solid #1E3A8A; 
-    }
+    .header-box { background-color: #1E3A8A; color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+    .card-alerta { background-color: #FEF2F2; border-left: 5px solid #EF4444; padding: 10px; color: #991B1B; margin-bottom: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. CONEXIÓN (Basada en tu Sheet actual)
+# 2. CONEXIÓN Y FUNCIONES DE DATOS
 @st.cache_resource
 def conectar():
     return gspread.authorize(Credentials.from_service_account_info(
@@ -30,12 +26,13 @@ def conectar():
         scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     ))
 
-def traer_pestaña(nombre):
+def traer_datos(pestaña):
     sh = conectar().open("Gestion_Magallan")
-    df = pd.DataFrame(sh.worksheet(nombre).get_all_records())
-    return df, sh.worksheet(nombre)
+    ws = sh.worksheet(pestaña)
+    df = pd.DataFrame(ws.get_all_records())
+    return df, ws
 
-# 3. LOGIN
+# 3. SEGURIDAD
 if "authenticated" not in st.session_state:
     st.title("🏗️ Grupo Magallan | Acceso")
     u = st.selectbox("Usuario", ["---"] + list(st.secrets["usuarios"].keys()))
@@ -45,105 +42,132 @@ if "authenticated" not in st.session_state:
             st.session_state.update({"authenticated": True, "user": u})
             st.rerun()
 else:
-    # --- PANTALLA PRINCIPAL: BUSCADOR ---
-    df_p, ws_p = traer_pestaña("Proyectos")
-    
+    # --- MENÚ LATERAL ---
     st.sidebar.title(f"👤 {st.session_state['user']}")
+    menu = st.sidebar.radio("IR A:", ["📂 GESTIÓN POR PPTO", "📈 ESTADÍSTICAS", "🆕 NUEVO PROYECTO"])
+    
     if st.sidebar.button("Cerrar Sesión"):
         del st.session_state["authenticated"]
         st.rerun()
 
-    st.title("📂 Buscador de Presupuestos")
-    
-    # Selector unificado
-    lista_obras = ["---"] + [f"{r['Nro_Ppto']} - {r['Cliente']}" for _, r in df_p.iterrows()]
-    seleccion = st.selectbox("Seleccione una obra para gestionar:", lista_obras)
+    # --- A. GESTIÓN POR PRESUPUESTO (EDICIÓN TOTAL) ---
+    if menu == "📂 GESTIÓN POR PPTO":
+        df_p, ws_p = traer_datos("Proyectos")
+        st.title("📂 Buscador y Edición de Obra")
+        
+        lista = ["---"] + [f"{r['Nro_Ppto']} - {r['Cliente']}" for _, r in df_p.iterrows()]
+        sel = st.selectbox("Seleccione Presupuesto:", lista)
 
-    if seleccion != "---":
-        nro_sel = str(seleccion.split(" - ")[0])
-        obra = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].iloc[0]
+        if sel != "---":
+            nro_sel = str(sel.split(" - ")[0])
+            obra = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].iloc[0]
 
-        # ENCABEZADO DINÁMICO
-        st.markdown(f"""
-            <div class="header-box">
-                <h2 style='margin:0;'>📋 Presupuesto #{nro_sel}</h2>
-                <p style='margin:0; opacity:0.9;'>Cliente: {obra['Cliente']} | Monto: ${obra['Monto_Total_Ars']} | IVA: {obra['IVA']}</p>
-            </div>
-        """, unsafe_allow_html=True)
+            # Alerta de Vencimiento
+            try:
+                f_ent = pd.to_datetime(obra['Fecha_Entrega'], dayfirst=True).date()
+                if f_ent < date.today() and obra['Estado_Fabricacion'] != "Entregado":
+                    st.markdown(f"<div class='card-alerta'>⚠️ ATENCIÓN: Esta obra tiene fecha de entrega vencida ({obra['Fecha_Entrega']})</div>", unsafe_allow_html=True)
+            except: pass
 
-        # PANEL DE TRABAJO (TABS)
-        t_fab, t_log, t_chat, t_hist = st.tabs(["🏗️ Planta", "🚚 Logística", "💬 Chat", "📜 Historial"])
+            st.markdown(f"<div class='header-box'><h2>📋 Ppto #{nro_sel} | {obra['Cliente']}</h2></div>", unsafe_allow_html=True)
 
-        with t_fab:
-            st.subheader("Control de Fabricación")
-            with st.form("form_planta"):
-                est_actual = st.selectbox("Estado en Planta:", ["Esperando", "Preparacion", "Terminado", "Entregado"], 
-                                        index=["Esperando", "Preparacion", "Terminado", "Entregado"].index(obra['Estado_Fabricacion']))
-                notas = st.text_area("Materiales Pendientes:", value=obra['Materiales_Pendientes'])
-                if st.form_submit_button("Actualizar Planta"):
-                    fila = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].index[0] + 2
-                    ws_p.update_cell(fila, 3, est_actual) # Estado_Fabricacion
-                    ws_p.update_cell(fila, 10, notas)     # Materiales_Pendientes
-                    
-                    # Registro automático en Historial
-                    _, ws_h = traer_pestaña("Historial")
-                    ws_h.append_row([nro_sel, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], f"Cambio a {est_actual}"])
-                    st.success("Planta actualizada con éxito")
-                    st.rerun()
+            t1, t2, t3, t4 = st.tabs(["✏️ EDITAR VALORES", "🏗️ PLANTA", "🚚 LOGÍSTICA", "💬 CHAT/HISTORIAL"])
 
-        with t_log:
-            st.subheader("Datos de Instalación")
-            df_l, ws_l = traer_pestaña("Logistica")
-            log_obra = df_l[df_l['Nro_Ppto'].astype(str) == nro_sel]
-            
-            with st.form("form_log"):
-                tec = st.text_input("Técnico Asignado:", value=log_obra.iloc[0]['Tecnicos'] if not log_obra.empty else "")
-                f_ins = st.text_input("Fecha Instalación (DD/MM/YYYY):", value=log_obra.iloc[0]['Fecha_Instalacion'] if not log_obra.empty else "")
-                est_log = st.selectbox("Estado Entrega:", ["Pendiente", "Esperando", "Terminado"], 
-                                     index=0 if log_obra.empty else ["Pendiente", "Esperando", "Terminado"].index(log_obra.iloc[0]['Estado_Entrega']))
+            with t1:
+                st.subheader("Modificar Datos del Presupuesto")
+                with st.form("form_valores"):
+                    c1, c2 = st.columns(2)
+                    new_cli = c1.text_input("Nombre Cliente", value=obra['Cliente'])
+                    new_mon = c2.number_input("Monto Total (Ars)", value=int(obra['Monto_Total_Ars']))
+                    new_iva = c1.selectbox("IVA", ["sin iva", "iva 10.5%", "iva 21%"], 
+                                         index=["sin iva", "iva 10.5%", "iva 21%"].index(str(obra['IVA']).lower()))
+                    if st.form_submit_button("GUARDAR CAMBIOS DE VALOR"):
+                        idx = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].index[0] + 2
+                        ws_p.update_cell(idx, 2, new_cli) # Col B
+                        ws_p.update_cell(idx, 6, new_mon) # Col F
+                        ws_p.update_cell(idx, 8, new_iva) # Col H
+                        # Registro
+                        _, ws_h = traer_datos("Historial")
+                        ws_h.append_row([nro_sel, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], f"Editó valores: ${new_mon}"])
+                        st.success("Valores actualizados")
+                        st.rerun()
+
+            with t2:
+                st.subheader("Gestión de Fabricación")
+                with st.form("form_fab"):
+                    est = st.selectbox("Estado:", ["Esperando", "Preparacion", "Terminado", "Entregado"], 
+                                     index=["Esperando", "Preparacion", "Terminado", "Entregado"].index(obra['Estado_Fabricacion']))
+                    mat = st.text_area("Materiales/Notas:", value=obra['Materiales_Pendientes'])
+                    if st.form_submit_button("ACTUALIZAR PLANTA"):
+                        idx = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].index[0] + 2
+                        ws_p.update_cell(idx, 3, est) # Col C
+                        ws_p.update_cell(idx, 10, mat) # Col J
+                        _, ws_h = traer_datos("Historial")
+                        ws_h.append_row([nro_sel, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], f"Cambio estado a {est}"])
+                        st.success("Estado en planta guardado")
+                        st.rerun()
+
+            with t3:
+                st.subheader("Logística e Instalación")
+                df_l, ws_l = traer_datos("Logistica")
+                log = df_l[df_l['Nro_Ppto'].astype(str) == nro_sel]
+                with st.form("form_log"):
+                    t_inc = st.text_input("Técnico:", value=log.iloc[0]['Tecnicos'] if not log.empty else "")
+                    f_inc = st.text_input("Fecha (DD/MM/YYYY):", value=log.iloc[0]['Fecha_Instalacion'] if not log.empty else "")
+                    if st.form_submit_button("GUARDAR LOGÍSTICA"):
+                        if not log.empty:
+                            fila_l = log.index[0] + 2
+                            ws_l.update_cell(fila_l, 2, t_inc)
+                            ws_l.update_cell(fila_l, 3, f_inc)
+                        else:
+                            ws_l.append_row([nro_sel, t_inc, f_inc, "Pendiente"])
+                        st.success("Logística guardada")
+                        st.rerun()
+
+            with t4:
+                df_c, ws_c = traer_datos("Chat_Interno")
+                st.subheader("Historial y Notas")
+                with st.form("f_chat", clear_on_submit=True):
+                    msg = st.text_input("Agregar nota/mensaje:")
+                    if st.form_submit_button("Enviar"):
+                        ws_c.append_row([nro_sel, st.session_state['user'], datetime.now().strftime("%d/%m/%Y %H:%M"), msg])
+                        st.rerun()
                 
-                if st.form_submit_button("Guardar Logística"):
-                    if not log_obra.empty:
-                        fila_l = log_obra.index[0] + 2
-                        ws_l.update_cell(fila_l, 2, tec) # Col B: Tecnicos
-                        ws_l.update_cell(fila_l, 3, f_ins) # Col C: Fecha_Instalacion
-                        ws_l.update_cell(fila_l, 4, est_log) # Col D: Estado_Entrega
-                    else:
-                        ws_l.append_row([nro_sel, tec, f_ins, est_log])
-                    st.success("Datos de logística guardados")
-                    st.rerun()
+                # Mostrar chat e historial unidos
+                df_h, _ = traer_datos("Historial")
+                comb = pd.concat([
+                    mensajes := df_c[df_c['Nro_Ppto'].astype(str) == nro_sel].rename(columns={'Mensaje': 'Accion'}),
+                    hist := df_h[df_h['Nro_Ppto'].astype(str) == nro_sel].rename(columns={'Detalle': 'Accion'})
+                ]).sort_values('Fecha_Hora', ascending=False)
+                st.table(comb[['Fecha_Hora', 'Usuario', 'Accion']])
 
-        with t_chat:
-            st.subheader("Chat del Proyecto")
-            df_c, ws_c = traer_pestaña("Chat_Interno")
-            mensajes = df_c[df_c['Nro_Ppto'].astype(str) == nro_sel]
+    # --- B. ESTADÍSTICAS POR USUARIO ---
+    elif menu == "📈 ESTADÍSTICAS":
+        st.title("📈 Rendimiento de Equipo")
+        df_h, _ = traer_datos("Historial")
+        if not df_h.empty:
+            df_h['f_dt'] = pd.to_datetime(df_h['Fecha_Hora'], dayfirst=True, errors='coerce').dt.date
+            c1, c2 = st.columns(2)
+            f_i = c1.date_input("Desde", date(2025, 1, 1))
+            f_f = c2.date_input("Hasta", date.today())
             
-            with st.form("form_chat", clear_on_submit=True):
-                nuevo_msg = st.text_area("Escribir mensaje:")
-                if st.form_submit_button("Enviar"):
-                    ws_c.append_row([nro_sel, st.session_state['user'], datetime.now().strftime("%d/%m/%Y %H:%M"), nuevo_msg])
-                    st.rerun()
+            df_f = df_h[(df_h['f_dt'] >= f_i) & (df_h['f_dt'] <= f_f)].dropna(subset=['f_dt'])
             
-            for _, m in mensajes.iloc[::-1].iterrows():
-                st.markdown(f"<div class='chat-bubble'><b>{m['Usuario']}</b> ({m['Fecha_Hora']}):<br>{m['Mensaje']}</div>", unsafe_allow_html=True)
+            st.plotly_chart(px.bar(df_f['Usuario'].value_counts().reset_index(), 
+                                  x='Usuario', y='count', title="Acciones totales por usuario"), use_container_width=True)
+            st.subheader("Detalle de movimientos")
+            st.dataframe(df_f[['Nro_Ppto', 'Fecha_Hora', 'Usuario', 'Detalle']], use_container_width=True)
 
-        with t_hist:
-            st.subheader("Historial de Movimientos")
-            df_h, _ = traer_pestaña("Historial")
-            hist_filtrado = df_h[df_h['Nro_Ppto'].astype(str) == nro_sel]
-            st.table(hist_filtrado[['Fecha_Hora', 'Usuario', 'Detalle']])
-
-    else:
-        # PANTALLA DE INICIO: OPCIÓN DE CARGA NUEVA
-        st.info("Seleccione un presupuesto arriba para ver los detalles o cree uno nuevo aquí:")
-        with st.expander("➕ Cargar Nuevo Presupuesto"):
-            with st.form("nuevo_ppto"):
-                c1, c2 = st.columns(2)
-                v_nro = c1.text_input("Nro_Ppto:")
-                v_cli = c2.text_input("Cliente:")
-                v_mon = c1.number_input("Monto Total ($):", min_value=0)
-                v_iva = c2.selectbox("IVA:", ["sin iva", "iva 10.5%", "iva 21%"])
-                if st.form_submit_button("Crear Proyecto"):
-                    ws_p.append_row([v_nro, v_cli, "Esperando", date.today().strftime("%d/%m/%Y"), "", v_mon, 0, v_iva, "", ""])
-                    st.success("¡Proyecto creado!")
-                    st.rerun()
+    # --- C. NUEVO PROYECTO ---
+    elif menu == "🆕 NUEVO PROYECTO":
+        st.title("🆕 Carga de Obra")
+        with st.form("alta"):
+            c1, c2 = st.columns(2)
+            n_n = c1.text_input("Número Ppto:")
+            n_c = c2.text_input("Cliente:")
+            n_m = c1.number_input("Monto Ars:", min_value=0)
+            n_i = c2.selectbox("IVA:", ["sin iva", "iva 10.5%", "iva 21%"])
+            if st.form_submit_button("CREAR PROYECTO"):
+                _, ws_p = traer_datos("Proyectos")
+                ws_p.append_row([n_n, n_c, "Esperando", date.today().strftime("%d/%m/%Y"), "", n_m, 0, n_i, "", ""])
+                st.success("Proyecto creado. Búscalo en GESTIÓN POR PPTO.")
