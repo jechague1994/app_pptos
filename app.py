@@ -3,21 +3,26 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, date
-import plotly.express as px
 
-# 1. CONFIGURACIÓN Y ESTILO PROFESIONAL
-st.set_page_config(page_title="Grupo Magallan | Sistema Integral", layout="wide")
-
+# 1. CONFIGURACIÓN Y ESTILO
+st.set_page_config(page_title="Grupo Magallan | Gestión Unificada", layout="wide")
 st.markdown("""
     <style>
-    html, body, [class*="st-"] { font-size: 1.05rem !important; }
-    .stButton>button { width: 100%; height: 50px; border-radius: 10px; background-color: #1E3A8A; color: white; }
-    .chat-box { background-color: #F3F4F6; padding: 10px; border-radius: 10px; margin-bottom: 5px; border-left: 5px solid #1E3A8A; }
-    .metric-card { background-color: #EFF6FF; padding: 15px; border-radius: 10px; border: 1px solid #DBEAFE; text-align: center; }
+    .stTabs [data-baseweb="tab-list"] { gap: 20px; }
+    .stTabs [data-baseweb="tab"] { 
+        height: 50px; background-color: #F1F5F9; border-radius: 8px; padding: 10px 20px; 
+    }
+    .stTabs [aria-selected="true"] { background-color: #1E3A8A !important; color: white !important; }
+    .header-box { 
+        background-color: #1E3A8A; color: white; padding: 25px; border-radius: 12px; margin-bottom: 25px; 
+    }
+    .chat-bubble { 
+        background: #F8FAFC; padding: 12px; border-radius: 10px; margin-bottom: 8px; border-left: 5px solid #1E3A8A; 
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. CONEXIÓN Y CARGA (Sincronizado con tus pestañas reales)
+# 2. CONEXIÓN (Basada en tu Sheet actual)
 @st.cache_resource
 def conectar():
     return gspread.authorize(Credentials.from_service_account_info(
@@ -25,15 +30,12 @@ def conectar():
         scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     ))
 
-def cargar_datos(pestaña):
-    try:
-        sh = conectar().open("Gestion_Magallan")
-        df = pd.DataFrame(sh.worksheet(pestaña).get_all_records())
-        return df
-    except:
-        return pd.DataFrame()
+def traer_pestaña(nombre):
+    sh = conectar().open("Gestion_Magallan")
+    df = pd.DataFrame(sh.worksheet(nombre).get_all_records())
+    return df, sh.worksheet(nombre)
 
-# 3. SISTEMA DE ACCESO
+# 3. LOGIN
 if "authenticated" not in st.session_state:
     st.title("🏗️ Grupo Magallan | Acceso")
     u = st.selectbox("Usuario", ["---"] + list(st.secrets["usuarios"].keys()))
@@ -43,108 +45,105 @@ if "authenticated" not in st.session_state:
             st.session_state.update({"authenticated": True, "user": u})
             st.rerun()
 else:
-    # --- MENÚ LATERAL ---
-    st.sidebar.title(f"👤 {st.session_state['user']}")
-    opcion = st.sidebar.radio("MENÚ PRINCIPAL", ["📊 TABLERO", "🆕 NUEVO PPTO", "🚚 LOGÍSTICA", "💬 CHAT", "📈 RENDIMIENTO"])
+    # --- PANTALLA PRINCIPAL: BUSCADOR ---
+    df_p, ws_p = traer_pestaña("Proyectos")
     
+    st.sidebar.title(f"👤 {st.session_state['user']}")
     if st.sidebar.button("Cerrar Sesión"):
         del st.session_state["authenticated"]
         st.rerun()
 
-    # --- 1. TABLERO CON BUSCADOR DINÁMICO ---
-    if opcion == "📊 TABLERO":
-        st.title("📊 Control de Planta")
-        df_p = cargar_datos("Proyectos")
-        
-        if not df_p.empty:
-            # Buscador integrado
-            busqueda = st.text_input("🔍 Buscar por Cliente o Nro_Ppto:", placeholder="Ej: Jonathan o 1001")
-            
-            # Filtro lógico
-            if busqueda:
-                df_mostrar = df_p[
-                    df_p['Cliente'].astype(str).str.contains(busqueda, case=False) | 
-                    df_p['Nro_Ppto'].astype(str).str.contains(busqueda, case=False)
-                ]
-            else:
-                df_mostrar = df_p
+    st.title("📂 Buscador de Presupuestos")
+    
+    # Selector unificado
+    lista_obras = ["---"] + [f"{r['Nro_Ppto']} - {r['Cliente']}" for _, r in df_p.iterrows()]
+    seleccion = st.selectbox("Seleccione una obra para gestionar:", lista_obras)
 
-            st.markdown(f'<div class="metric-card"><h3>Obras Visibles: {len(df_mostrar)}</h3></div>', unsafe_allow_html=True)
-            st.divider()
-            st.dataframe(df_mostrar, use_container_width=True, hide_index=True)
-        else:
-            st.warning("No hay datos en 'Proyectos'.")
+    if seleccion != "---":
+        nro_sel = str(seleccion.split(" - ")[0])
+        obra = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].iloc[0]
 
-    # --- 2. NUEVO PPTO (SEGÚN TU ESTRUCTURA) ---
-    elif opcion == "🆕 NUEVO PPTO":
-        st.title("🆕 Carga de Proyecto")
-        with st.form("form_carga"):
-            c1, c2, c3 = st.columns(3)
-            nro = c1.text_input("Nro_Ppto")
-            cliente = c2.text_input("Cliente")
-            monto = c3.number_input("Monto_Total_Ars", min_value=0)
-            
-            c4, c5, c6 = st.columns(3)
-            estado = c4.selectbox("Estado_Fabricacion", ["Esperando", "Preparacion", "Terminado", "Entregado"])
-            fecha_e = c5.date_input("Fecha_Entrega")
-            iva = c6.selectbox("IVA", ["sin iva", "iva 10.5%", "iva 21%"])
-            
-            notas = st.text_area("Materiales_Pendientes")
-            
-            if st.form_submit_button("REGISTRAR"):
-                sh = conectar().open("Gestion_Magallan")
-                # Coincide con: Nro_Ppto, Cliente, Estado_Fabricacion, Fecha_Carga, Fecha_Entrega, Monto_Total_Ars, Pagado_Ars, IVA, Notas_Planta, Materiales_Pendientes
-                nueva_fila = [nro, cliente, estado, datetime.now().strftime("%d/%m/%Y"), fecha_e.strftime("%d/%m/%Y"), monto, 0, iva, "", notas]
-                sh.worksheet("Proyectos").append_row(nueva_fila)
-                sh.worksheet("Historial").append_row([nro, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], "Alta de cortina"])
-                st.success("✅ Guardado.")
-                st.cache_data.clear()
+        # ENCABEZADO DINÁMICO
+        st.markdown(f"""
+            <div class="header-box">
+                <h2 style='margin:0;'>📋 Presupuesto #{nro_sel}</h2>
+                <p style='margin:0; opacity:0.9;'>Cliente: {obra['Cliente']} | Monto: ${obra['Monto_Total_Ars']} | IVA: {obra['IVA']}</p>
+            </div>
+        """, unsafe_allow_html=True)
 
-    # --- 3. LOGÍSTICA (INSTALADORES) ---
-    elif opcion == "🚚 LOGÍSTICA":
-        st.title("🚚 Instalaciones")
-        df_l = cargar_datos("Logistica")
-        if not df_l.empty:
-            st.dataframe(df_l, use_container_width=True, hide_index=True)
-            with st.expander("➕ Cargar Movimiento de Logística"):
-                with st.form("f_log"):
-                    nro_l = st.text_input("Nro_Ppto")
-                    tec = st.selectbox("Tecnicos", ["Irving", "Equipo A", "Equipo B"])
-                    f_inst = st.date_input("Fecha_Instalacion")
-                    est_ent = st.selectbox("Estado_Entrega", ["Pendiente", "Esperando", "Terminado"])
-                    if st.form_submit_button("GUARDAR LOGÍSTICA"):
-                        conectar().open("Gestion_Magallan").worksheet("Logistica").append_row([nro_l, tec, f_inst.strftime("%d/%m/%Y"), est_ent])
-                        st.cache_data.clear()
-                        st.rerun()
+        # PANEL DE TRABAJO (TABS)
+        t_fab, t_log, t_chat, t_hist = st.tabs(["🏗️ Planta", "🚚 Logística", "💬 Chat", "📜 Historial"])
 
-    # --- 4. CHAT INTERNO (POR PPTO) ---
-    elif opcion == "💬 CHAT":
-        st.title("💬 Chat de Equipo")
-        df_c = cargar_datos("Chat_Interno")
-        with st.form("chat_f", clear_on_submit=True):
-            nro_p = st.text_input("Nro_Ppto")
-            msg = st.text_input("Mensaje:")
-            if st.form_submit_button("Enviar"):
-                if msg:
-                    # Captura: Nro_Ppto, Usuario, Fecha_Hora, Mensaje
-                    conectar().open("Gestion_Magallan").worksheet("Chat_Interno").append_row([nro_p, st.session_state['user'], datetime.now().strftime("%d/%m/%Y %H:%M"), msg])
-                    st.cache_data.clear()
+        with t_fab:
+            st.subheader("Control de Fabricación")
+            with st.form("form_planta"):
+                est_actual = st.selectbox("Estado en Planta:", ["Esperando", "Preparacion", "Terminado", "Entregado"], 
+                                        index=["Esperando", "Preparacion", "Terminado", "Entregado"].index(obra['Estado_Fabricacion']))
+                notas = st.text_area("Materiales Pendientes:", value=obra['Materiales_Pendientes'])
+                if st.form_submit_button("Actualizar Planta"):
+                    fila = df_p[df_p['Nro_Ppto'].astype(str) == nro_sel].index[0] + 2
+                    ws_p.update_cell(fila, 3, est_actual) # Estado_Fabricacion
+                    ws_p.update_cell(fila, 10, notas)     # Materiales_Pendientes
+                    
+                    # Registro automático en Historial
+                    _, ws_h = traer_pestaña("Historial")
+                    ws_h.append_row([nro_sel, datetime.now().strftime("%d/%m/%Y %H:%M"), st.session_state['user'], f"Cambio a {est_actual}"])
+                    st.success("Planta actualizada con éxito")
                     st.rerun()
-        if not df_c.empty:
-            for _, r in df_c.iloc[::-1].iterrows():
-                st.markdown(f"<div class='chat-box'><small>{r['Fecha_Hora']} - {r['Usuario']} (Ppto: {r['Nro_Ppto']})</small><br>{r['Mensaje']}</div>", unsafe_allow_html=True)
 
-    # --- 5. RENDIMIENTO (ESTADÍSTICAS SIN ERRORES) ---
-    elif opcion == "📈 RENDIMIENTO":
-        st.title("📈 Análisis de Equipo")
-        df_h = cargar_datos("Historial")
-        if not df_h.empty:
-            # Corrección de TypeError en fechas
-            df_h['f_dt'] = pd.to_datetime(df_h['Fecha_Hora'], dayfirst=True, errors='coerce').dt.date
-            c1, c2 = st.columns(2)
-            f_ini = c1.date_input("Desde", value=date(2024, 1, 1))
-            f_fin = c2.date_input("Hasta", value=date.today())
-            df_f = df_h[(df_h['f_dt'] >= f_ini) & (df_h['f_dt'] <= f_fin)].dropna(subset=['f_dt'])
-            if not df_f.empty:
-                st.plotly_chart(px.pie(df_f, names='Usuario', hole=0.3))
-                st.table(df_f['Usuario'].value_counts())
+        with t_log:
+            st.subheader("Datos de Instalación")
+            df_l, ws_l = traer_pestaña("Logistica")
+            log_obra = df_l[df_l['Nro_Ppto'].astype(str) == nro_sel]
+            
+            with st.form("form_log"):
+                tec = st.text_input("Técnico Asignado:", value=log_obra.iloc[0]['Tecnicos'] if not log_obra.empty else "")
+                f_ins = st.text_input("Fecha Instalación (DD/MM/YYYY):", value=log_obra.iloc[0]['Fecha_Instalacion'] if not log_obra.empty else "")
+                est_log = st.selectbox("Estado Entrega:", ["Pendiente", "Esperando", "Terminado"], 
+                                     index=0 if log_obra.empty else ["Pendiente", "Esperando", "Terminado"].index(log_obra.iloc[0]['Estado_Entrega']))
+                
+                if st.form_submit_button("Guardar Logística"):
+                    if not log_obra.empty:
+                        fila_l = log_obra.index[0] + 2
+                        ws_l.update_cell(fila_l, 2, tec) # Col B: Tecnicos
+                        ws_l.update_cell(fila_l, 3, f_ins) # Col C: Fecha_Instalacion
+                        ws_l.update_cell(fila_l, 4, est_log) # Col D: Estado_Entrega
+                    else:
+                        ws_l.append_row([nro_sel, tec, f_ins, est_log])
+                    st.success("Datos de logística guardados")
+                    st.rerun()
+
+        with t_chat:
+            st.subheader("Chat del Proyecto")
+            df_c, ws_c = traer_pestaña("Chat_Interno")
+            mensajes = df_c[df_c['Nro_Ppto'].astype(str) == nro_sel]
+            
+            with st.form("form_chat", clear_on_submit=True):
+                nuevo_msg = st.text_area("Escribir mensaje:")
+                if st.form_submit_button("Enviar"):
+                    ws_c.append_row([nro_sel, st.session_state['user'], datetime.now().strftime("%d/%m/%Y %H:%M"), nuevo_msg])
+                    st.rerun()
+            
+            for _, m in mensajes.iloc[::-1].iterrows():
+                st.markdown(f"<div class='chat-bubble'><b>{m['Usuario']}</b> ({m['Fecha_Hora']}):<br>{m['Mensaje']}</div>", unsafe_allow_html=True)
+
+        with t_hist:
+            st.subheader("Historial de Movimientos")
+            df_h, _ = traer_pestaña("Historial")
+            hist_filtrado = df_h[df_h['Nro_Ppto'].astype(str) == nro_sel]
+            st.table(hist_filtrado[['Fecha_Hora', 'Usuario', 'Detalle']])
+
+    else:
+        # PANTALLA DE INICIO: OPCIÓN DE CARGA NUEVA
+        st.info("Seleccione un presupuesto arriba para ver los detalles o cree uno nuevo aquí:")
+        with st.expander("➕ Cargar Nuevo Presupuesto"):
+            with st.form("nuevo_ppto"):
+                c1, c2 = st.columns(2)
+                v_nro = c1.text_input("Nro_Ppto:")
+                v_cli = c2.text_input("Cliente:")
+                v_mon = c1.number_input("Monto Total ($):", min_value=0)
+                v_iva = c2.selectbox("IVA:", ["sin iva", "iva 10.5%", "iva 21%"])
+                if st.form_submit_button("Crear Proyecto"):
+                    ws_p.append_row([v_nro, v_cli, "Esperando", date.today().strftime("%d/%m/%Y"), "", v_mon, 0, v_iva, "", ""])
+                    st.success("¡Proyecto creado!")
+                    st.rerun()
