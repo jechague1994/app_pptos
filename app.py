@@ -3,11 +3,10 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# 1. Configuración
+# 1. Configuración de página
 st.set_page_config(page_title="Grupo Magallan | Gestión", layout="wide", page_icon="🏗️")
-st.title("🏗️ Panel de Gestión Operativa - Grupo Magallan")
 
-# 2. Conexión (Scopes de Sheets y Drive)
+# 2. Conexión con Google Sheets
 @st.cache_resource
 def conectar_google():
     try:
@@ -16,87 +15,107 @@ def conectar_google():
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
         return gspread.authorize(credentials)
     except Exception as e:
-        st.error(f"❌ Error de credenciales: {e}")
+        st.error(f"❌ Error de conexión: {e}")
         st.stop()
 
 client = conectar_google()
 SHEET_NAME = "Gestion_Magallan"
 
-# 3. Función para cargar y guardar
+# 3. Funciones de Carga y Escritura
 def cargar_datos():
     sh = client.open(SHEET_NAME)
-    # Traemos las pestañas como DataFrames
-    df_p = pd.DataFrame(sh.worksheet("Proyectos").get_all_records())
-    df_l = pd.DataFrame(sh.worksheet("Logistica").get_all_records())
-    return sh, df_p, df_l
+    ws = sh.worksheet("Proyectos")
+    df = pd.DataFrame(ws.get_all_records())
+    return sh, ws, df
 
-sh, df_proyectos, df_logistica = cargar_datos()
+sh, ws_proyectos, df_proyectos = cargar_datos()
 
-# 4. Interfaz de Usuario
-if not df_proyectos.empty:
-    st.sidebar.success("✅ Conectado")
+# --- INTERFAZ DE USUARIO ---
+st.title("🏗️ Gestión de Presupuestos - Grupo Magallan")
+
+# Menú lateral para navegar entre Crear o Editar
+menu = st.sidebar.radio("Ir a:", ["📊 Ver y Editar Existentes", "🆕 Crear Nuevo Presupuesto"])
+
+if menu == "🆕 Crear Nuevo Presupuesto":
+    st.header("Cargar Nuevo Presupuesto")
     
-    # Selector de Presupuesto
-    col_id = "Nro_Ppto" 
-    lista_ppto = df_proyectos[col_id].unique()
-    ppto_sel = st.sidebar.selectbox("Seleccione Nro de Presupuesto:", lista_ppto)
-    
-    # Obtener fila actual para edición
-    idx_fila = df_proyectos[df_proyectos[col_id] == ppto_sel].index[0]
-    datos_p = df_proyectos.iloc[idx_fila]
-
-    # --- PESTAÑAS ---
-    tab_ver, tab_editar = st.tabs(["📊 Visualizar", "✏️ Editar Información"])
-
-    with tab_ver:
+    with st.form("form_nuevo_ppto", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Estado de Fabricación", datos_p.get('Estado_Fabricacion', 'N/A'))
-            st.write(f"*Cliente:* {datos_p.get('Cliente', 'N/A')}")
-        with c2:
-            total = float(datos_p.get('Monto_Total_Ars', 0))
-            pagado = float(datos_p.get('Pagado_Ars', 0))
-            st.metric("Saldo Pendiente", f"$ {total - pagado:,.2f}")
-
-    with tab_editar:
-        st.subheader(f"Modificar Presupuesto #{ppto_sel}")
         
-        with st.form("form_edicion"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Campo para Estado (con las opciones que usas en tu Excel)
-                nuevo_estado = st.selectbox(
-                    "Estado de Fabricación", 
-                    ["Esperando", "Preparacion", "Terminado", "Entregado"],
-                    index=["Esperando", "Preparacion", "Terminado", "Entregado"].index(datos_p['Estado_Fabricacion']) if datos_p['Estado_Fabricacion'] in ["Esperando", "Preparacion", "Terminado", "Entregado"] else 0
-                )
-                nueva_nota = st.text_area("Notas de Planta", value=datos_p.get('notas_planta', ''))
-            
-            with col2:
-                # Campos para Precios
-                nuevo_monto = st.number_input("Monto Total (ARS)", value=float(datos_p.get('Monto_Total_Ars', 0)))
-                nuevo_pagado = st.number_input("Monto Pagado (ARS)", value=float(datos_p.get('Pagado_Ars', 0)))
-            
-            boton_guardar = st.form_submit_button("Guardar Cambios")
+        with c1:
+            nro_ppto = st.number_input("Número de Presupuesto", min_value=1, step=1)
+            cliente = st.text_input("Nombre del Cliente")
+            tipo_pago = st.selectbox("Tipo de Pago", ["Anticipo", "Pago Total"])
+            iva_opcion = st.radio("¿Incluye IVA?", ["Sin IVA", "Con IVA (21%)"], horizontal=True)
 
-            if boton_guardar:
+        with c2:
+            monto_total = st.number_input("Valor Total del Presupuesto (ARS)", min_value=0.0, format="%.2f")
+            
+            if tipo_pago == "Anticipo":
+                monto_abonado = st.number_input("Monto del Anticipo (ARS)", min_value=0.0, max_value=monto_total, format="%.2f")
+            else:
+                monto_abonado = monto_total
+                st.info(f"Se registrará el pago total por $ {monto_total:,.2f}")
+            
+            saldo_restante = monto_total - monto_abonado
+            st.warning(f"*Saldo Restante: $ {saldo_restante:,.2f}*")
+
+        notas = st.text_area("Notas adicionales")
+        boton_crear = st.form_submit_button("Registrar Presupuesto")
+
+        if boton_crear:
+            if nro_ppto and cliente:
                 try:
-                    ws_proyectos = sh.worksheet("Proyectos")
-                    # En Google Sheets las filas empiezan en 1 y la fila 1 es el encabezado, por eso idx+2
-                    fila_real = int(idx_fila) + 2
-                    
-                    # Actualizamos las celdas específicas (ajusta la letra de columna según tu Excel)
-                    # Ejemplo: C es Estado, D es Notas, E es Monto, F es Pagado
-                    ws_proyectos.update_cell(fila_real, 3, nuevo_estado)       # Columna C: Estado_Fabricacion
-                    ws_proyectos.update_cell(fila_real, 4, nueva_nota)         # Columna D: notas_planta
-                    ws_proyectos.update_cell(fila_real, 5, nuevo_monto)        # Columna E: Monto_Total_Ars
-                    ws_proyectos.update_cell(fila_real, 6, nuevo_pagado)       # Columna F: Pagado_Ars
-                    
-                    st.success("✅ ¡Datos actualizados en Google Sheets!")
-                    st.rerun() # Recarga la app para ver los cambios
+                    # Preparar la fila para Google Sheets 
+                    # El orden debe coincidir con tus columnas (A: Nro, B: Cliente, C: Estado, D: Total, E: Pagado, F: IVA, G: Notas...)
+                    nueva_fila = [
+                        nro_ppto, 
+                        cliente, 
+                        "Esperando", # Estado inicial por defecto
+                        monto_total, 
+                        monto_abonado, 
+                        iva_opcion, 
+                        notas
+                    ]
+                    ws_proyectos.append_row(nueva_fila)
+                    st.success(f"✅ Presupuesto #{nro_ppto} de {cliente} creado con éxito.")
+                    st.balloons()
                 except Exception as e:
                     st.error(f"Error al guardar: {e}")
+            else:
+                st.error("Por favor completa el Número de Presupuesto y el nombre del Cliente.")
 
-else:
-    st.warning("No se encontraron datos.")
+elif menu == "📊 Ver y Editar Existentes":
+    if not df_proyectos.empty:
+        # Buscador / Selector
+        lista_ppto = df_proyectos["Nro_Ppto"].unique()
+        ppto_sel = st.selectbox("Seleccione Presupuesto para editar:", lista_ppto)
+        
+        idx = df_proyectos[df_proyectos["Nro_Ppto"] == ppto_sel].index[0]
+        datos = df_proyectos.iloc[idx]
+        
+        st.divider()
+        
+        with st.form("form_editar"):
+            col1, col2 = st.columns(2)
+            with col1:
+                nuevo_estado = st.selectbox("Estado", ["Esperando", "Preparacion", "Terminado", "Entregado"], 
+                                          index=["Esperando", "Preparacion", "Terminado", "Entregado"].index(datos['Estado_Fabricacion']) if datos['Estado_Fabricacion'] in ["Esperando", "Preparacion", "Terminado", "Entregado"] else 0)
+                nuevo_pagado = st.number_input("Actualizar Monto Pagado (ARS)", value=float(datos.get('Pagado_Ars', 0)))
+            
+            with col2:
+                st.write(f"*Cliente:* {datos['Cliente']}")
+                st.write(f"*Monto Total:* $ {datos['Monto_Total_Ars']:,.2f}")
+                st.write(f"*IVA:* {datos.get('IVA', 'No especificado')}")
+                saldo = float(datos['Monto_Total_Ars']) - nuevo_pagado
+                st.subheader(f"Saldo: $ {saldo:,.2f}")
+
+            if st.form_submit_button("Actualizar"):
+                fila_excel = int(idx) + 2
+                # Ejemplo de columnas: C (3) es Estado, E (5) es Pagado
+                ws_proyectos.update_cell(fila_excel, 3, nuevo_estado)
+                ws_proyectos.update_cell(fila_excel, 5, nuevo_pagado)
+                st.success("¡Datos actualizados!")
+                st.rerun()
+    else:
+        st.info("No hay presupuestos cargados.")
