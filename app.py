@@ -3,103 +3,100 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 
-# 1. Configuración de la página
+# 1. Configuración
 st.set_page_config(page_title="Grupo Magallan | Gestión", layout="wide", page_icon="🏗️")
-
 st.title("🏗️ Panel de Gestión Operativa - Grupo Magallan")
 
-# 2. Conexión con Google Sheets usando Secrets y Scopes ampliados
+# 2. Conexión (Scopes de Sheets y Drive)
 @st.cache_resource
 def conectar_google():
     try:
-        # Definimos los permisos necesarios (Sheets + Drive) para evitar el error 403
-        scope = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        
-        # Cargamos las credenciales desde los Secrets de Streamlit
+        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         creds_dict = st.secrets["gcp_service_account"]
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
         return gspread.authorize(credentials)
     except Exception as e:
-        st.error(f"❌ Error de configuración de credenciales: {e}")
+        st.error(f"❌ Error de credenciales: {e}")
         st.stop()
 
 client = conectar_google()
-
-# Nombre exacto de tu archivo en Google Drive
 SHEET_NAME = "Gestion_Magallan"
 
-@st.cache_data(ttl=60) # Los datos se refrescan cada minuto
+# 3. Función para cargar y guardar
 def cargar_datos():
-    try:
-        sh = client.open(SHEET_NAME)
-        
-        # Cargamos las 3 pestañas confirmadas en tus capturas
-        df_p = pd.DataFrame(sh.worksheet("Proyectos").get_all_records())
-        df_l = pd.DataFrame(sh.worksheet("Logistica").get_all_records())
-        df_c = pd.DataFrame(sh.worksheet("Chat_Interno").get_all_records())
-        
-        # Normalizamos nombres de columnas para evitar errores de tipeo
-        for df in [df_p, df_l, df_c]:
-            df.columns = [str(c).strip().lower() for c in df.columns]
-            
-        return df_p, df_l, df_c
-    except Exception as e:
-        st.error(f"❌ Error al leer el Excel: {e}")
-        return None, None, None
+    sh = client.open(SHEET_NAME)
+    # Traemos las pestañas como DataFrames
+    df_p = pd.DataFrame(sh.worksheet("Proyectos").get_all_records())
+    df_l = pd.DataFrame(sh.worksheet("Logistica").get_all_records())
+    return sh, df_p, df_l
 
-# 3. Ejecución de la carga
-df_proyectos, df_logistica, df_chat = cargar_datos()
+sh, df_proyectos, df_logistica = cargar_datos()
 
-if df_proyectos is not None and not df_proyectos.empty:
-    # Sidebar: Selección de Obra
-    st.sidebar.success("✅ Conexión Establecida")
+# 4. Interfaz de Usuario
+if not df_proyectos.empty:
+    st.sidebar.success("✅ Conectado")
     
-    col_id = "nro_ppto" # Nombre de la columna en tu Excel
-    if col_id in df_proyectos.columns:
-        lista_ppto = df_proyectos[col_id].unique()
-        ppto_sel = st.sidebar.selectbox("Seleccione Nro de Presupuesto:", lista_ppto)
+    # Selector de Presupuesto
+    col_id = "Nro_Ppto" 
+    lista_ppto = df_proyectos[col_id].unique()
+    ppto_sel = st.sidebar.selectbox("Seleccione Nro de Presupuesto:", lista_ppto)
+    
+    # Obtener fila actual para edición
+    idx_fila = df_proyectos[df_proyectos[col_id] == ppto_sel].index[0]
+    datos_p = df_proyectos.iloc[idx_fila]
+
+    # --- PESTAÑAS ---
+    tab_ver, tab_editar = st.tabs(["📊 Visualizar", "✏️ Editar Información"])
+
+    with tab_ver:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric("Estado de Fabricación", datos_p.get('Estado_Fabricacion', 'N/A'))
+            st.write(f"*Cliente:* {datos_p.get('Cliente', 'N/A')}")
+        with c2:
+            total = float(datos_p.get('Monto_Total_Ars', 0))
+            pagado = float(datos_p.get('Pagado_Ars', 0))
+            st.metric("Saldo Pendiente", f"$ {total - pagado:,.2f}")
+
+    with tab_editar:
+        st.subheader(f"Modificar Presupuesto #{ppto_sel}")
         
-        # Filtrado de datos por presupuesto seleccionado
-        datos_p = df_proyectos[df_proyectos[col_id] == ppto_sel].iloc[0]
-        
-        # --- DISEÑO DE PESTAÑAS ---
-        tab1, tab2, tab3 = st.tabs(["📊 Fabricación", "🚚 Logística", "💬 Chat"])
+        with st.form("form_edicion"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Campo para Estado (con las opciones que usas en tu Excel)
+                nuevo_estado = st.selectbox(
+                    "Estado de Fabricación", 
+                    ["Esperando", "Preparacion", "Terminado", "Entregado"],
+                    index=["Esperando", "Preparacion", "Terminado", "Entregado"].index(datos_p['Estado_Fabricacion']) if datos_p['Estado_Fabricacion'] in ["Esperando", "Preparacion", "Terminado", "Entregado"] else 0
+                )
+                nueva_nota = st.text_area("Notas de Planta", value=datos_p.get('notas_planta', ''))
+            
+            with col2:
+                # Campos para Precios
+                nuevo_monto = st.number_input("Monto Total (ARS)", value=float(datos_p.get('Monto_Total_Ars', 0)))
+                nuevo_pagado = st.number_input("Monto Pagado (ARS)", value=float(datos_p.get('Pagado_Ars', 0)))
+            
+            boton_guardar = st.form_submit_button("Guardar Cambios")
 
-        with tab1:
-            c1, c2 = st.columns(2)
-            with c1:
-                st.subheader("Información General")
-                st.write(f"*Cliente:* {datos_p.get('cliente', 'N/A')}")
-                st.info(f"*Estado Fabricación:* {datos_p.get('estado_fabricacion', 'Pendiente')}")
-            with c2:
-                st.subheader("Finanzas")
-                # Cálculo de saldo (Monto Total - Pagado)
-                total = float(datos_p.get('monto_total_ars', 0))
-                pagado = float(datos_p.get('pagado_ars', 0))
-                st.metric("Saldo Pendiente", f"$ {total - pagado:,.2f}", delta_color="inverse")
+            if boton_guardar:
+                try:
+                    ws_proyectos = sh.worksheet("Proyectos")
+                    # En Google Sheets las filas empiezan en 1 y la fila 1 es el encabezado, por eso idx+2
+                    fila_real = int(idx_fila) + 2
+                    
+                    # Actualizamos las celdas específicas (ajusta la letra de columna según tu Excel)
+                    # Ejemplo: C es Estado, D es Notas, E es Monto, F es Pagado
+                    ws_proyectos.update_cell(fila_real, 3, nuevo_estado)       # Columna C: Estado_Fabricacion
+                    ws_proyectos.update_cell(fila_real, 4, nueva_nota)         # Columna D: notas_planta
+                    ws_proyectos.update_cell(fila_real, 5, nuevo_monto)        # Columna E: Monto_Total_Ars
+                    ws_proyectos.update_cell(fila_real, 6, nuevo_pagado)       # Columna F: Pagado_Ars
+                    
+                    st.success("✅ ¡Datos actualizados en Google Sheets!")
+                    st.rerun() # Recarga la app para ver los cambios
+                except Exception as e:
+                    st.error(f"Error al guardar: {e}")
 
-        with tab2:
-            if col_id in df_logistica.columns and ppto_sel in df_logistica[col_id].values:
-                datos_l = df_logistica[df_logistica[col_id] == ppto_sel].iloc[0]
-                st.write(f"*Técnicos Asignados:* {datos_l.get('tecnicos', 'No asignado')}")
-                st.write(f"*Fecha Programada:* {datos_l.get('fecha_instalacion', 'Sin fecha')}")
-                st.warning(f"*Estado de Entrega:* {datos_l.get('estado_entrega', '-')}")
-            else:
-                st.info("No hay datos logísticos registrados para este presupuesto.")
-
-        with tab3:
-            # Filtramos el chat por el número de presupuesto
-            mensajes = df_chat[df_chat[col_id].astype(str) == str(ppto_sel)]
-            if not mensajes.empty:
-                for _, m in mensajes.iterrows():
-                    with st.chat_message("user"):
-                        st.write(f"*{m.get('usuario', 'Sistema')}*: {m.get('mensaje', '')}")
-            else:
-                st.write("No hay mensajes previos en esta obra.")
-    else:
-        st.error(f"No se encontró la columna '{col_id}' en el archivo.")
 else:
-    st.warning("Esperando conexión con Google Sheets...")
+    st.warning("No se encontraron datos.")
