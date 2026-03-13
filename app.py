@@ -75,11 +75,12 @@ def cargar_datos():
         ws = sh.worksheet("Saldos_Simples")
         df = pd.DataFrame(ws.get_all_records())
         
+        # Sanitizar números
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         
-        # Fecha de creación y cálculo de días (No se detiene)
+        # Fecha de creación y días
         df['Fecha_Creacion'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce')
         ahora = datetime.now()
         df['Días_Fabricación'] = (ahora - df['Fecha_Creacion']).dt.days.fillna(0).astype(int)
@@ -142,26 +143,21 @@ if not df.empty:
             es_corp = str(r.get('Corporativa','')).upper() == "SI"
             dias_f = int(r['Días_Fabricación'])
             
-            # Lógica de color de tarjeta (Prioridad: Corp > Demora > Normal)
+            # Color de tarjeta
             if es_corp:
-                clase = "card-corp"
-                monto_clase = "monto-corp"
+                clase, monto_clase = "card-corp", "monto-corp"
             elif dias_f > 15:
-                clase = "card-demora"
-                monto_clase = "monto-alerta"
+                clase, monto_clase = "card-demora", "monto-alerta"
             else:
-                clase = "card-vendedor"
-                monto_clase = "monto-alerta"
-            
-            tag_demora = f'<span class="tag-demora">⚠️ DEMORA: {dias_f} DÍAS</span>' if dias_f > 15 else f'<span>Hace {dias_f} días</span>'
+                clase, monto_clase = "card-vendedor", "monto-alerta"
             
             st.markdown(f"""
                 <div class="{clase}">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div style="flex:2;">
                             <b>{r['Cliente']}</b><br>
-                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']}</small><br>
-                            <small>{tag_demora}</small>
+                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {fmt(r['Monto_Total'])}</small><br>
+                            <small>{f'⚠️ DEMORA: {dias_f} DÍAS' if dias_f > 15 else f'Hace {dias_f} días'}</small>
                         </div>
                         <div style="text-align:right;">
                             <span class="{monto_clase}">{fmt(r['Saldo'])}</span>
@@ -170,11 +166,18 @@ if not df.empty:
                 </div>
             """, unsafe_allow_html=True)
             
-            with st.expander(f"Actualizar saldo: {r['Cliente']}"):
-                nv = st.number_input(f"Nuevo total cobrado:", value=float(r['Anticipo']), step=1000.0, key=f"e_{i}")
-                if st.button("Guardar Cambios", key=f"b_{i}"):
-                    ws.update_cell(i+2, 5, nv)
-                    st.success("¡Actualizado!"); st.rerun()
+            with st.expander(f"⚙️ Editar Montos: {r['Cliente']}"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    nuevo_total = st.number_input(f"Monto Total ($)", value=float(r['Monto_Total']), step=1000.0, key=f"tot_{i}")
+                with c2:
+                    nuevo_pago = st.number_input(f"Ya Cobrado ($)", value=float(r['Anticipo']), step=1000.0, key=f"ant_{i}")
+                
+                if st.button("Guardar Cambios", key=f"btn_{i}"):
+                    # Actualizar celdas en Google Sheets (Columna 4: Monto_Total, Columna 5: Anticipo)
+                    ws.update_cell(i+2, 4, nuevo_total)
+                    ws.update_cell(i+2, 5, nuevo_pago)
+                    st.success("¡Datos actualizados!"); st.rerun()
 
     with col_r:
         st.subheader("📝 Registrar Nueva Venta")
@@ -184,12 +187,12 @@ if not df.empty:
             f_cli = st.text_input("Nombre del Cliente")
             f_ven = st.selectbox("Vendedor Responsable", ["Jacqueline", "Jonathan", "Roberto"])
             f_fac = st.selectbox("Facturación", ["Facturado", "No Facturado"])
-            f_tot = st.number_input("Monto Total ($)", min_value=0.0)
-            f_ant = st.number_input("Pago/Anticipo ($)", min_value=0.0)
+            f_tot = st.number_input("Monto Total ($)", min_value=0.0, step=1000.0)
+            f_ant = st.number_input("Pago/Anticipo ($)", min_value=0.0, step=1000.0)
             f_corp = st.checkbox("¿Es Cuenta Corporativa?")
             if st.form_submit_button("REGISTRAR OPERACIÓN"):
                 f_apro = datetime.now().strftime("%Y-%m-%d %H:%M")
                 ws.append_row([f_crea.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, f_fac, f_apro, "SI" if f_corp else "NO"])
                 st.balloons(); st.rerun()
 else:
-    st.warning("No se encontraron registros en el archivo de Google Sheets.")
+    st.warning("No se encontraron registros.")
