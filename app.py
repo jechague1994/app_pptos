@@ -6,9 +6,8 @@ import plotly.express as px
 from datetime import datetime
 
 # --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Magallan Sistema", layout="wide")
+st.set_page_config(page_title="Magallan Sistema Pro", layout="wide")
 
-# Función de conexión ultra-segura
 @st.cache_resource(ttl=60)
 def conectar_gs():
     try:
@@ -29,100 +28,109 @@ def obtener_datos():
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # BLINDAJE: Si faltan columnas, las creamos vacías para que no de KeyError
-        columnas_maestras = ['Fecha', 'Nro_Ppto', 'Cliente', 'Monto_Total', 'Anticipo', 'Vendedor', 'Facturado']
-        for col in columnas_maestras:
-            if col not in df.columns:
-                df[col] = 0 if col in ['Monto_Total', 'Anticipo'] else "S/D"
+        # BLINDAJE DE COLUMNAS
+        cols = ['Fecha', 'Nro_Ppto', 'Cliente', 'Monto_Total', 'Anticipo', 'Vendedor', 'Facturado', 'Fecha_Confirmacion']
+        for c in cols:
+            if c not in df.columns: df[c] = ""
         
-        # Limpieza de números
+        # Limpieza de datos
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
+        
+        # Procesamiento de Fechas
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        df['Fecha_Confirmacion'] = pd.to_datetime(df['Fecha_Confirmacion'], errors='coerce')
+        
+        # Cálculo de días (Antigüedad desde la fecha del presupuesto)
+        hoy = pd.Timestamp(datetime.now().date())
+        df['Dias_Pasados'] = (hoy - df['Fecha']).dt.days.fillna(0).astype(int)
         
         return df, ws
     except Exception as e:
-        st.error(f"Error al leer la hoja: {e}")
+        st.error(f"Error al leer: {e}")
         return pd.DataFrame(), None
 
 # --- EJECUCIÓN ---
-st.title("📊 Magallan - Gestión de Planta")
+st.title("🚀 Magallan - Control de Ventas y Cobranzas")
 
 df, ws = obtener_datos()
 
 if not df.empty:
-    # FILTROS
+    # FILTROS Y ANÁLISIS DE DEUDA
     with st.sidebar:
         st.header("Filtros")
         vendedores = ["Todos"] + sorted(df['Vendedor'].unique().tolist())
-        sel_vendedor = st.selectbox("Filtrar por Vendedor", vendedores)
+        sel_vendedor = st.selectbox("Vendedor", vendedores)
         
-    df_filtrado = df.copy()
-    if sel_vendedor != "Todos":
-        df_filtrado = df[df['Vendedor'] == sel_vendedor]
+    df_f = df[df['Vendedor'] == sel_vendedor] if sel_vendedor != "Todos" else df.copy()
 
-    # MÉTRICAS ESTABLES (Sin HTML)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("VENTAS TOTALES", f"${df_filtrado['Monto_Total'].sum():,.0f}")
-    c2.metric("COBRADO", f"${df_filtrado['Anticipo'].sum():,.0f}")
-    c3.metric("SALDO PENDIENTE", f"${df_filtrado['Saldo'].sum():,.0f}")
+    # MÉTRICAS ESTRATÉGICAS
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("VENTAS TOTALES", f"${df_f['Monto_Total'].sum():,.0f}")
+    c2.metric("COBRADO", f"${df_f['Anticipo'].sum():,.0f}")
+    
+    # Análisis de Deuda Joven vs Vieja
+    deuda_vieja = df_f[(df_f['Dias_Pasados'] > 30) & (df_f['Saldo'] > 0)]['Saldo'].sum()
+    c3.metric("DEUDA +30 DÍAS", f"${deuda_vieja:,.0f}", delta="Crítico", delta_color="inverse")
+    c4.metric("PENDIENTE TOTAL", f"${df_f['Saldo'].sum():,.0f}")
 
-    # RENDIMIENTO
-    st.subheader("📈 Rendimiento y Facturación")
-    g1, g2 = st.columns(2)
-    
-    with g1:
-        # Gráfico Facturado vs No Facturado
-        fig1 = px.bar(df_filtrado.groupby('Facturado')['Monto_Total'].sum().reset_index(), 
-                      x='Facturado', y='Monto_Total', color='Facturado', title="Distribución de Facturación")
-        st.plotly_chart(fig1, use_container_width=True)
-    
-    with g2:
-        # Cobranza por Vendedor
-        fig2 = px.bar(df.groupby('Vendedor')[['Anticipo', 'Saldo']].sum().reset_index(), 
-                      x='Vendedor', y=['Anticipo', 'Saldo'], barmode='group', title="Cobranza por Vendedor")
-        st.plotly_chart(fig2, use_container_width=True)
+    # GRÁFICO DE ANTIGÜEDAD
+    st.subheader("📊 Análisis de Antigüedad de Deuda")
+    df_f['Estado_Deuda'] = df_f.apply(lambda r: 'Al día' if r['Saldo'] <= 0 else ('Crítica (+30d)' if r['Dias_Pasados'] > 30 else 'Reciente'), axis=1)
+    fig_deuda = px.pie(df_f[df_f['Saldo']>0], values='Saldo', names='Estado_Deuda', 
+                       color='Estado_Deuda', color_discrete_map={'Crítica (+30d)':'#E11D48', 'Reciente':'#F59E0B'})
+    st.plotly_chart(fig_deuda, use_container_width=True)
 
     st.divider()
 
-    # FORMULARIO Y LISTADO
+    # INTERFAZ DE CARGA Y LISTADO
     izq, der = st.columns([1, 2])
     
     with izq:
-        st.subheader("➕ Cargar Nuevo")
-        with st.form("nueva_carga", clear_on_submit=True):
+        st.subheader("➕ Nueva Venta")
+        with st.form("form_v2", clear_on_submit=True):
             f_nro = st.text_input("Nro MAG#")
             f_cli = st.text_input("Cliente")
             f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto"])
-            f_tot = st.number_input("Total", min_value=0.0)
-            f_ant = st.number_input("Anticipo", min_value=0.0)
+            f_tot = st.number_input("Total ($)", min_value=0.0)
+            f_ant = st.number_input("Anticipo ($)", min_value=0.0)
             f_fac = st.selectbox("Factura", ["Sin Facturar", "Facturado"])
-            f_fec = st.date_input("Fecha", datetime.now())
-            if st.form_submit_button("Guardar en Excel"):
-                ws.append_row([f_fec.strftime("%Y-%m-%d"), f_nro, f_cli, f_tot, f_ant, f_ven, f_fac])
-                st.success("¡Registrado!")
+            f_fec_ppto = st.date_input("Fecha del Presupuesto", datetime.now())
+            
+            if st.form_submit_button("REGISTRAR VENTA"):
+                # La fecha de confirmación se toma automáticamente hoy
+                f_conf = datetime.now().strftime("%Y-%m-%d")
+                ws.append_row([f_fec_ppto.strftime("%Y-%m-%d"), f_nro, f_cli, f_tot, f_ant, f_ven, f_fac, f_conf])
+                st.success("✅ Venta Confirmada y Registrada")
                 st.rerun()
 
     with der:
-        st.subheader("📋 Listado de Saldos")
-        buscar = st.text_input("🔍 Buscar Cliente o Nro...")
-        df_final = df_filtrado[df_filtrado.apply(lambda r: buscar.lower() in str(r.values).lower(), axis=1)] if buscar else df_filtrado
+        st.subheader("📋 Gestión de Saldos y Fechas")
+        buscar = st.text_input("🔍 Buscar por cliente o Nro...")
+        df_list = df_f[df_f.apply(lambda r: buscar.lower() in str(r.values).lower(), axis=1)] if buscar else df_f
         
-        for i, r in df_final.iterrows():
-            # Usamos componentes nativos de Streamlit para evitar fallos de HTML
+        for i, r in df_list.sort_values(by='Fecha', ascending=False).iterrows():
             with st.container(border=True):
-                col_a, col_b = st.columns([3, 1])
-                col_a.write(f"*MAG-{r['Nro_Ppto']} | {r['Cliente']}*")
-                col_a.caption(f"Vendedor: {r['Vendedor']} | {r['Facturado']}")
-                col_b.write(f"*Saldo: ${r['Saldo']:,.0f}*")
+                col_info, col_monto = st.columns([3, 1])
                 
-                with st.expander("Editar Montos"):
-                    new_t = st.number_input("Total", value=float(r['Monto_Total']), key=f"t{i}")
-                    new_a = st.number_input("Anticipo", value=float(r['Anticipo']), key=f"a{i}")
-                    if st.button("Actualizar", key=f"b{i}"):
-                        ws.update_cell(i+2, 4, new_t)
-                        ws.update_cell(i+2, 5, new_a)
+                # Formateo de fechas para el listado
+                f_ppto = r['Fecha'].strftime('%d/%m/%y') if not pd.isnull(r['Fecha']) else "S/F"
+                f_conf = r['Fecha_Confirmacion'].strftime('%d/%m/%y') if not pd.isnull(r['Fecha_Confirmacion']) else "S/F"
+                
+                col_info.write(f"*MAG-{r['Nro_Ppto']} | {r['Cliente']}*")
+                col_info.caption(f"📅 Ppto: {f_ppto} | ✅ Confirmado: {f_conf} ({r['Dias_Pasados']} días)")
+                col_info.write(f"👤 {r['Vendedor']} | 📄 {r['Facturado']}")
+                
+                if r['Saldo'] > 0:
+                    col_monto.error(f"Debe: ${r['Saldo']:,.0f}")
+                else:
+                    col_monto.success("SALDADO")
+                
+                with st.expander("Actualizar Importes"):
+                    nt = st.number_input("Nuevo Total", value=float(r['Monto_Total']), key=f"t{i}")
+                    na = st.number_input("Nuevo Anticipo", value=float(r['Anticipo']), key=f"a{i}")
+                    if st.button("Guardar", key=f"b{i}"):
+                        ws.update_cell(i+2, 4, nt)
+                        ws.update_cell(i+2, 5, na)
                         st.rerun()
-else:
-    st.warning("No hay datos para mostrar. Asegúrate de que el Excel 'Gestion_Magallan' tiene la hoja 'Saldos_Simples' con datos.")
