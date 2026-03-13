@@ -1,19 +1,4 @@
-[15:35, 13/3/2026] Jonathan: import streamlit as st
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-import plotly.express as px
-from datetime import datetime
-
-# --- 1. CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
-
-st.markdown("""
-    <style>
-    .stMetric { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
-    .card-vendedor { background: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #3b82f6; box-shadow: 0 2px 5px rgba(0,0,0,0.08); }
-    .card-corp { background: #f8fafc; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #1e293b; border: 1…
-[15:38, 13/3/2026] Jonathan: import streamlit as st
+import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -23,15 +8,39 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN ---
 st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
 
-# Estilos para que se vea impecable
+# Estilos corregidos para evitar el SyntaxError
 st.markdown("""
-    <style>
-    .stMetric { background: white; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
-    .card-vendedor { background: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #3b82f6; box-shadow: 0 2px 5px rgba(0,0,0,0.08); }
-    .card-corp { background: #f8fafc; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #1e293b; border: 1px solid #e2e8f0; }
-    .monto-alerta { color: #e11d48; font-weight: 800; font-size: 1.2rem; }
-    </style>
-    """, unsafe_allow_html=True)
+<style>
+    [data-testid="stMetric"] {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .card-vendedor { 
+        background: white; 
+        border-radius: 10px; 
+        padding: 18px; 
+        margin-bottom: 12px; 
+        border-left: 6px solid #3b82f6; 
+        box-shadow: 0 2px 5px rgba(0,0,0,0.08); 
+    }
+    .card-corp { 
+        background: #f8fafc; 
+        border-radius: 10px; 
+        padding: 18px; 
+        margin-bottom: 12px; 
+        border-left: 6px solid #1e293b; 
+        border: 1px solid #e2e8f0; 
+    }
+    .monto-alerta { 
+        color: #e11d48; 
+        font-weight: 800; 
+        font-size: 1.2rem; 
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- 2. CONEXIÓN ---
 @st.cache_resource(ttl=60)
@@ -51,16 +60,15 @@ def cargar_datos():
     try:
         sh = gc.open("Gestion_Magallan")
         ws = sh.worksheet("Saldos_Simples")
-        data = ws.get_all_records()
-        df = pd.DataFrame(data)
+        df = pd.DataFrame(ws.get_all_records())
         
-        # Limpieza profunda para evitar el error de la imagen
+        # Limpieza de datos
         df['Fecha_Aprobacion'] = pd.to_datetime(df['Fecha_Aprobacion'], errors='coerce')
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         return df, ws
-    except Exception:
+    except:
         return pd.DataFrame(), None
 
 # --- 3. UTILIDADES ---
@@ -71,27 +79,26 @@ def fmt(n):
 df, ws = cargar_datos()
 
 if not df.empty:
-    # Sidebar con filtros
-    st.sidebar.header("🔍 Filtros de Equipo")
+    st.sidebar.header("🔍 Filtros")
     vendedores = ["Todos"] + sorted([v for v in df['Vendedor'].unique() if v and v != "Distribuidor"])
-    v_sel = st.sidebar.selectbox("Seleccionar Vendedor", vendedores)
+    v_sel = st.sidebar.selectbox("Vendedor", vendedores)
     
     df_f = df.copy()
     if v_sel != "Todos":
         df_f = df_f[df_f['Vendedor'] == v_sel]
 
-    st.title("📊 Gestión Magallan Intelligence")
+    st.title("📊 Magallan Intelligence")
 
-    # Métricas principales con puntos
+    # Métricas con separador de miles
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("VENTAS TOTALES", fmt(df_f['Monto_Total'].sum()))
-    m2.metric("TOTAL COBRADO", fmt(df_f['Anticipo'].sum()))
+    m2.metric("COBRADO", fmt(df_f['Anticipo'].sum()))
     m3.metric("SALDO PENDIENTE", fmt(df_f['Saldo'].sum()), delta_color="inverse")
     m4.metric("PEDIDOS", len(df_f))
 
     st.divider()
 
-    # Gráficos superiores
+    # Gráficos
     g1, g2, g3 = st.columns(3)
     with g1:
         st.plotly_chart(px.pie(df_f, values='Monto_Total', names='Vendedor', title="Cuota de Ventas", hole=0.4), use_container_width=True)
@@ -103,16 +110,15 @@ if not df.empty:
     with g3:
         df_t = df_f.dropna(subset=['Fecha_Aprobacion']).sort_values('Fecha_Aprobacion')
         df_t['Mes'] = df_t['Fecha_Aprobacion'].dt.strftime('%b %y')
-        st.plotly_chart(px.area(df_t.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Evolución Mensual", markers=True), use_container_width=True)
+        st.plotly_chart(px.area(df_t.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Evolución", markers=True), use_container_width=True)
 
     st.divider()
 
-    # Operaciones y Registro
     col_l, col_r = st.columns([1.8, 1.2])
 
     with col_l:
-        st.subheader("📑 Listado de Cobranzas")
-        busc = st.text_input("🔍 Buscar por cliente o presupuesto...")
+        st.subheader("📑 Cobranzas")
+        busc = st.text_input("🔍 Buscar cliente...")
         df_v = df_f[df_f.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_f
         
         for i, r in df_v.sort_values(by='Fecha_Aprobacion', ascending=False).iterrows():
@@ -122,7 +128,7 @@ if not df.empty:
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div style="flex:2;">
                             <b>{r['Cliente']}</b><br>
-                            <small>Ppto: {r['Nro_Ppto']} | Creado: {r.get('Fecha_Creacion','-')} | {r['Vendedor']}</small>
+                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']}</small>
                         </div>
                         <div style="text-align:right;">
                             <span class="monto-alerta">{fmt(r['Saldo'])}</span>
@@ -132,11 +138,10 @@ if not df.empty:
             """, unsafe_allow_html=True)
             
             with st.expander("Actualizar Pago"):
-                st.write(f"Cobrado actualmente: *{fmt(r['Anticipo'])}*")
-                nv = st.number_input("Nuevo total cobrado", value=float(r['Anticipo']), step=1000.0, key=f"p_{i}")
-                if st.button("Guardar en Excel", key=f"b_{i}"):
+                nv = st.number_input(f"Total cobrado (Actual: {fmt(r['Anticipo'])})", value=float(r['Anticipo']), step=1000.0, key=f"p_{i}")
+                if st.button("Guardar", key=f"b_{i}"):
                     ws.update_cell(i+2, 5, nv)
-                    st.success("¡Planilla Actualizada!"); st.rerun()
+                    st.success("¡Listo!"); st.rerun()
 
     with col_r:
         st.subheader("📝 Nueva Venta")
@@ -146,13 +151,13 @@ if not df.empty:
             f_cli = st.text_input("Cliente")
             f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto"])
             f_fac = st.selectbox("Estado Factura", ["Facturado", "No Facturado"])
-            f_tot = st.number_input("Monto Total $", min_value=0.0, step=1000.0, format="%.0f")
-            f_ant = st.number_input("Anticipo $", min_value=0.0, step=1000.0, format="%.0f")
+            f_tot = st.number_input("Monto Total $", min_value=0.0, step=1000.0)
+            f_ant = st.number_input("Anticipo $", min_value=0.0, step=1000.0)
             f_corp = st.checkbox("Cuenta Corporativa")
             
-            if st.form_submit_button("REGISTRAR VENTA"):
+            if st.form_submit_button("REGISTRAR"):
                 f_apro = datetime.now().strftime("%Y-%m-%d %H:%M")
                 ws.append_row([f_crea.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, f_fac, f_apro, "SI" if f_corp else "NO"])
-                st.balloons(); st.rerun()
+                st.rerun()
 else:
-    st.info("Conectado. Agrega el primer registro para activar el dashboard.")
+    st.info("Conectado. Agrega datos en tu Excel.")
