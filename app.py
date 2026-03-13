@@ -56,58 +56,48 @@ def consultar_jira():
     try:
         conf = st.secrets["jira"]
         base_url = conf['url'].strip().rstrip('/')
-        # Usamos API v2 que es más estable para búsquedas simples
-        api_url = f"{base_url}/rest/api/2/search"
+        # ACTUALIZACIÓN A API V3 (SEGÚN ERROR 410)
+        api_url = f"{base_url}/rest/api/3/search"
         auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
         
-        # JQL simplificado sin comillas extra
-        project = conf["project_key"].strip()
         params = {
-            'jql': f'project={project}',
-            'fields': 'summary,status',
+            'jql': f'project="{conf["project_key"].strip()}"',
+            'fields': ['summary', 'status'],
             'maxResults': 100
         }
         
         res = requests.get(api_url, params=params, auth=auth, timeout=10)
         if res.status_code == 200:
             issues = res.json().get('issues', [])
-            # Mapeo: Título limpio -> Nombre del Estado
+            # En V3 el acceso a status name puede variar ligeramente
             return {str(iss['fields']['summary']).strip(): iss['fields']['status']['name'] for iss in issues}
-        else:
-            return {}
     except:
-        return {}
+        pass
+    return {}
 
-# --- 3. BARRA LATERAL (TEST REPARADO) ---
+# --- 3. BARRA LATERAL (TEST ACTUALIZADO V3) ---
 with st.sidebar:
-    st.header("🛠 Diagnóstico")
-    if st.button("Ejecutar Test"):
+    st.header("🛠 Diagnóstico V3")
+    if st.button("Probar Conexión"):
         conf = st.secrets["jira"]
         base = conf['url'].strip().rstrip('/')
         auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
         
-        # Test 1: Conexión básica
-        res = requests.get(f"{base}/rest/api/2/myself", auth=auth)
-        if res.status_code == 200:
-            st.success("✅ Credenciales OK")
-            # Test 2: Búsqueda sin JQL complejo (solo el proyecto)
-            search_url = f"{base}/rest/api/2/search"
-            p = {'jql': f'project={conf["project_key"].strip()}', 'maxResults': 3}
-            res_q = requests.get(search_url, params=p, auth=auth)
-            
-            if res_q.status_code == 200:
-                st.success("✅ Búsqueda OK")
-                tickets = res_q.json().get('issues', [])
-                st.info(f"Tickets detectados: {len(tickets)}")
-                for t in tickets:
-                    st.write(f"- {t['fields']['summary']}")
+        st.write("Conectando a API v3...")
+        try:
+            # Test de búsqueda v3
+            res = requests.get(f"{base}/rest/api/3/search", params={'jql': f'project="{conf["project_key"].strip()}"', 'maxResults': 1}, auth=auth)
+            if res.status_code == 200:
+                st.success("✅ ¡Conectado con API v3!")
+                total = res.json().get('total', 0)
+                st.info(f"Tickets en el proyecto: {total}")
             else:
-                st.error(f"❌ Error en búsqueda: {res_q.status_code}")
-                st.code(res_q.text) # Muestra el error exacto de Jira
-        else:
-            st.error(f"❌ Error conexión: {res.status_code}")
+                st.error(f"❌ Error {res.status_code}")
+                st.json(res.json())
+        except Exception as e:
+            st.error(f"Fallo: {e}")
 
-# --- 4. LÓGICA PRINCIPAL ---
+# --- 4. DASHBOARD ---
 df, ws = cargar_datos()
 dict_jira = consultar_jira()
 
@@ -126,9 +116,9 @@ if not df.empty:
     col_izq, col_der = st.columns([1.5, 2])
 
     with col_izq:
-        st.subheader("📝 Nuevo Registro")
+        st.subheader("📝 Registro")
         with st.form("alta"):
-            nro = st.text_input("Nro Ppto (Igual a Jira)")
+            nro = st.text_input("Nro Ppto (ID Jira)")
             cli = st.text_input("Cliente")
             ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto", "Distribuidor"])
             fac = st.selectbox("Facturación", ["Facturado", "Sin Facturar", "Pendiente"])
@@ -140,11 +130,11 @@ if not df.empty:
             
             if st.form_submit_button("GUARDAR"):
                 ws.append_row([f_ppto.strftime("%Y-%m-%d"), nro, cli, tot, ant, ven, fac, f_vta.strftime("%Y-%m-%d"), "SI" if corp else "NO"])
-                st.success("¡Guardado!"); st.rerun()
+                st.success("¡Listo!"); st.rerun()
 
     with col_der:
-        st.subheader("📑 Cartera de Pedidos")
-        busc = st.text_input("🔍 Filtrar por nombre o ppto...")
+        st.subheader("📑 Cartera")
+        busc = st.text_input("🔍 Buscar...")
         df_v = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
         
         for i, r in df_v.sort_values(by='Fecha', ascending=False).iterrows():
@@ -158,10 +148,9 @@ if not df.empty:
                     <div style="display:flex; justify-content:space-between;">
                         <div style="flex:2;">
                             <b>{r['Cliente']}</b> <span class="status-badge">🛠 {est_j}</span><br>
-                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r.get('Facturado','-')}</small><br>
-                            <small>📅 {r['Fecha'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha']) else ''}</small>
+                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r.get('Facturado','-')}</small>
                         </div>
-                        <div style="text-align:right; flex:1;">
+                        <div style="text-align:right;">
                             <span class="monto-alerta">${r['Saldo']:,.0f}</span>
                         </div>
                     </div>
@@ -170,7 +159,7 @@ if not df.empty:
             
             with st.expander("Actualizar"):
                 nuevo = st.number_input("Monto cobrado", value=float(r['Anticipo']), key=f"u{i}")
-                if st.button("Confirmar", key=f"b{i}"):
+                if st.button("OK", key=f"b{i}"):
                     ws.update_cell(i+2, 5, nuevo); st.rerun()
 
     # Gráfico mensual
@@ -179,4 +168,4 @@ if not df.empty:
     fig = px.line(df_graf.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Evolución de Ventas", markers=True)
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No hay datos para mostrar.")
+    st.info("Sin datos.")
