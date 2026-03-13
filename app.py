@@ -8,7 +8,11 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
 
-COLORES_VENDEDORES = {"Jacqueline": "#FFB6C1", "Jonathan": "#ADD8E6", "Roberto": "#98FB98"}
+COLORES_VENDEDORES = {
+    "Jacqueline": "#FFB6C1", 
+    "Jonathan": "#ADD8E6",   
+    "Roberto": "#98FB98"     
+}
 
 estilos = """
 <style>
@@ -18,7 +22,6 @@ estilos = """
     .card-corp { background-color: #1e293b; color: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #6366f1; }
     .monto-alerta { color: #e11d48; font-weight: 800; font-size: 1.2rem; }
     .monto-corp { color: #818cf8; font-weight: 800; font-size: 1.2rem; }
-    .tag-demora { background-color: #fef08a; color: #854d0e; padding: 2px 8px; border-radius: 10px; font-size: 0.75rem; font-weight: bold; }
 </style>
 """
 st.markdown(estilos, unsafe_allow_html=True)
@@ -43,9 +46,7 @@ def cargar_datos():
         ws = sh.worksheet("Saldos_Simples")
         df = pd.DataFrame(ws.get_all_records())
         
-        # Asegurar columna de Estado
-        if 'Estado' not in df.columns:
-            df['Estado'] = 'Pendiente'
+        if 'Estado' not in df.columns: df['Estado'] = 'Pendiente'
         
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
@@ -64,18 +65,12 @@ def fmt(n): return f"$ {n:,.0f}".replace(",", ".")
 df, ws = cargar_datos()
 
 if not df.empty:
-    # FILTROS
     st.sidebar.header("🔍 Filtros")
     ver_completados = st.sidebar.checkbox("Ver trabajos completados")
     v_sel = st.sidebar.selectbox("Vendedor", ["Todos"] + sorted(list(df['Vendedor'].unique())))
     
-    # Filtrado por Estado y Vendedor
     df_f = df.copy()
-    if not ver_completados:
-        df_f = df_f[df_f['Estado'] != 'Completado']
-    else:
-        df_f = df_f[df_f['Estado'] == 'Completado']
-        
+    df_f = df_f[df_f['Estado'] == ('Completado' if ver_completados else 'Pendiente')]
     if v_sel != "Todos":
         df_f = df_f[df_f['Vendedor'] == v_sel]
 
@@ -86,7 +81,19 @@ if not df.empty:
     m1.metric("VENTAS TOTALES", fmt(df_f['Monto_Total'].sum()))
     m2.metric("RECAUDADO", fmt(df_f['Anticipo'].sum()))
     m3.metric("DEUDA PENDIENTE", fmt(df_f['Saldo'].sum()), delta_color="inverse")
-    m4.metric("TRABAJOS", len(df_f))
+    m4.metric("PEDIDOS", len(df_f))
+
+    st.divider()
+
+    # --- GRÁFICOS PASTEL ---
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        st.plotly_chart(px.pie(df_f, values='Monto_Total', names='Vendedor', title="Cuota Ventas", hole=0.5, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+    with g2:
+        st.plotly_chart(px.pie(df_f, values='Monto_Total', names='Facturado', title="Facturación", color='Facturado', color_discrete_map={"Facturado": "#A7F3D0", "No Facturado": "#FCA5A5"}), use_container_width=True)
+    with g3:
+        df_rank = df_f.groupby('Vendedor')['Anticipo'].sum().reset_index().sort_values('Anticipo')
+        st.plotly_chart(px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', title="Ranking Cobranza", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
     st.divider()
 
@@ -94,66 +101,69 @@ if not df.empty:
     col_l, col_r = st.columns([1.7, 1.3])
 
     with col_l:
-        st.subheader("📑 Gestión de Trabajos")
-        busc = st.text_input("🔍 Buscar por nombre o Ppto...")
+        st.subheader("📑 Gestión de Cartera")
+        busc = st.text_input("🔍 Buscar cliente...")
         df_v = df_f[df_f.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_f
         
         for i, r in df_v.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
             es_corp = str(r.get('Corporativa','')).upper() == "SI"
             dias_f = int(r['Días_Fabricación'])
-            
             clase = "card-corp" if es_corp else ("card-demora" if dias_f > 15 else "card-vendedor")
             monto_clase = "monto-corp" if es_corp else "monto-alerta"
-            
+
             st.markdown(f"""
                 <div class="{clase}">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div style="flex:2;">
                             <b>{r['Cliente']}</b> {'✅' if r['Estado'] == 'Completado' else ''}<br>
                             <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']}</small><br>
-                            <small>{f'⚠️ DEMORA: {dias_f} DÍAS' if dias_f > 15 else f'Hace {dias_f} días'}</small>
+                            <small>{'⚠️ DEMORA: ' + str(dias_f) + ' DÍAS' if dias_f > 15 else 'Hace ' + str(dias_f) + ' días'}</small>
                         </div>
                         <div style="text-align:right;">
-                            <span class="{monto_clase}">{fmt(r['Saldo'])}</span>
+                            <small>Monto Total: {fmt(r['Monto_Total'])}</small><br>
+                            <span class="{monto_clase}">Saldo: {fmt(r['Saldo'])}</span>
                         </div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
             
-            with st.expander(f"Acciones para: {r['Cliente']}"):
-                c1, c2 = st.columns(2)
+            with st.expander(f"Editar datos de {r['Cliente']}"):
+                c1, c2, c3 = st.columns(3)
                 with c1:
-                    nv = st.number_input(f"Cobrado:", value=float(r['Anticipo']), key=f"e_{i}")
-                    if st.button("Guardar Cobro", key=f"b_{i}"):
-                        ws.update_cell(i+2, 5, nv)
-                        st.rerun()
+                    nuevo_monto = st.number_input(f"Monto Total:", value=float(r['Monto_Total']), key=f"tot_{i}")
                 with c2:
-                    if r['Estado'] != 'Completado':
-                        if st.button("🏁 COMPLETAR TRABAJO", key=f"comp_{i}"):
-                            # Asumiendo que Estado es la columna 10 (J)
-                            # Si no existe la columna en el Excel físico, hay que crearla.
-                            ws.update_cell(i+2, 10, "Completado")
-                            st.success("¡Trabajo finalizado!"); st.rerun()
-                    else:
-                        if st.button("⏪ Reabrir Trabajo", key=f"reab_{i}"):
-                            ws.update_cell(i+2, 10, "Pendiente")
-                            st.rerun()
+                    nuevo_pago = st.number_input(f"Cobrado:", value=float(r['Anticipo']), key=f"pag_{i}")
+                with c3:
+                    st.write("---")
+                    if st.button("💾 Guardar", key=f"save_{i}"):
+                        # Columna 4 = Monto_Total, Columna 5 = Anticipo
+                        ws.update_cell(i+2, 4, nuevo_monto)
+                        ws.update_cell(i+2, 5, nuevo_pago)
+                        st.rerun()
+                
+                st.divider()
+                st_c1, st_c2 = st.columns(2)
+                with st_c1:
+                    label = "⏪ Reabrir" if r['Estado'] == 'Completado' else "🏁 Completar"
+                    nuevo_estado = "Pendiente" if r['Estado'] == 'Completado' else "Completado"
+                    if st.button(label, key=f"st_{i}", use_container_width=True):
+                        ws.update_cell(i+2, 10, nuevo_estado)
+                        st.rerun()
 
     with col_r:
         st.subheader("📝 Nueva Venta")
         with st.form("alta", clear_on_submit=True):
             f_crea = st.date_input("Fecha Creación", datetime.now())
             f_ppto = st.text_input("Nro Presupuesto")
-            f_cli = st.text_input("Cliente")
+            f_cli = st.text_input("Nombre Cliente")
             f_ven = st.selectbox("Vendedor", ["Jacqueline", "Jonathan", "Roberto"])
-            f_fac = st.selectbox("Facturación", ["Facturado", "No Facturado"])
+            f_fac = st.selectbox("Estado Factura", ["Facturado", "No Facturado"])
             f_tot = st.number_input("Monto Total ($)", min_value=0.0)
             f_ant = st.number_input("Anticipo ($)", min_value=0.0)
-            f_corp = st.checkbox("¿Es Cuenta Corporativa?")
+            f_corp = st.checkbox("¿Cuenta Corporativa?")
             if st.form_submit_button("REGISTRAR"):
                 f_apro = datetime.now().strftime("%Y-%m-%d %H:%M")
-                # Se agrega "Pendiente" al final de la fila
                 ws.append_row([f_crea.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, f_fac, f_apro, "SI" if f_corp else "NO", "Pendiente"])
                 st.balloons(); st.rerun()
 else:
-    st.warning("No se encontraron registros.")
+    st.warning("No hay datos.")
