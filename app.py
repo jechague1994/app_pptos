@@ -1,4 +1,4 @@
-import streamlit as st
+[16:18, 13/3/2026] Jonathan: import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -13,6 +13,27 @@ COLORES_VENDEDORES = {
     "Jacqueline": "#FF69B4", # Rosa
     "Jonathan": "#3b82f6",   # Azul
     "Roberto": "#22c55e"     # Verde
+}
+
+st.markdown("""
+<style>
+    [data-testid="stMetric"] { background: white; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .card-vendedor { background: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #3b82f…
+[16:29, 13/3/2026] Jonathan: import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+import plotly.express as px
+from datetime import datetime
+
+# --- 1. CONFIGURACIÓN VISUAL ---
+st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
+
+# Definición de la paleta Magallan en tonos PASTEL
+COLORES_VENDEDORES = {
+    "Jacqueline": "#FFB6C1", # Rosa Pastel
+    "Jonathan": "#ADD8E6",   # Azul Pastel
+    "Roberto": "#98FB98"     # Verde Pastel
 }
 
 st.markdown("""
@@ -49,11 +70,16 @@ def cargar_datos():
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
-        df['Fecha_Aprobacion'] = pd.to_datetime(df['Fecha_Aprobacion'], errors='coerce')
+        
+        # Procesamiento de fechas
         df['Fecha_Creacion'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce')
-        df['Dias_Cierre'] = (df['Fecha_Aprobacion'] - df['Fecha_Creacion']).dt.days
+        
+        # CÁLCULO DE DÍAS EN FABRICACIÓN CORREGIDO: Siempre cuenta los días desde la creación hasta hoy
+        df['Días_Fabricación'] = (datetime.now() - df['Fecha_Creacion']).dt.days
+        
         return df, ws
-    except:
+    except Exception as e:
+        st.error(f"Error al cargar los datos: {e}")
         return pd.DataFrame(), None
 
 def fmt(n): return f"$ {n:,.0f}".replace(",", ".")
@@ -77,12 +103,14 @@ if not df.empty:
     m1.metric("VENTAS TOTALES", fmt(df_f['Monto_Total'].sum()))
     m2.metric("RECAUDADO", fmt(df_f['Anticipo'].sum()))
     m3.metric("DEUDA TOTAL", fmt(df_f['Saldo'].sum()), delta_color="inverse")
-    avg_dias = df_f['Dias_Cierre'].mean()
-    m4.metric("VELOCIDAD CIERRE", f"{avg_dias:.1f} días" if not pd.isna(avg_dias) else "0 días")
+    
+    # Métrica de promedio de días en fabricación (puedes ajustarlo si prefieres otra cosa)
+    avg_fabricacion = df_f['Días_Fabricación'].mean()
+    m4.metric("DÍAS PROMEDIO EN FABR.", f"{avg_fabricacion:.1f} días" if not pd.isna(avg_fabricacion) else "0 días")
 
     st.divider()
 
-    # --- GRÁFICOS CON COLORES FIJOS ---
+    # --- GRÁFICOS CON COLORES FIJOS PASTEL ---
     g1, g2, g3 = st.columns(3)
     
     with g1:
@@ -105,7 +133,7 @@ if not df.empty:
         st.plotly_chart(fig_facturacion, use_container_width=True)
         
     with g3:
-        # Ranking de Cobranza con colores fijos
+        # Ranking de Cobranza con colores fijos pastel
         df_rank = df_f.groupby('Vendedor')['Anticipo'].sum().reset_index().sort_values('Anticipo', ascending=True)
         fig_rank = px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', 
                           title="Ranking de Recaudación ($)",
@@ -123,19 +151,23 @@ if not df.empty:
         busc = st.text_input("🔍 Buscar cliente...")
         df_v = df_f[df_f.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_f
         
-        for i, r in df_v.sort_values(by='Fecha_Aprobacion', ascending=False).iterrows():
+        # Ordenar por fecha de creación descendente para ver los más nuevos primero
+        for i, r in df_v.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
             es_corp = str(r.get('Corporativa','')).upper() == "SI"
             clase = "card-corp" if es_corp else "card-vendedor"
             monto_clase = "monto-corp" if es_corp else "monto-alerta"
-            dias = r['Dias_Cierre']
-            tag_joven = f'<span class="tag-joven">⚡ CIERRE: {dias}d</span>' if (not pd.isna(dias) and dias <= 3) else ""
+            
+            # Mostrar los días en fabricación actuales
+            dias_fab = r['Días_Fabricación']
+            text_dias = f"Hace {dias_fab} días en fabricación" if not pd.isna(dias_fab) else "Días en fabr. N/A"
             
             st.markdown(f"""
                 <div class="{clase}">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div style="flex:2;">
-                            <b>{r['Cliente']}</b> {tag_joven}<br>
-                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r['Facturado']}</small>
+                            <b>{r['Cliente']}</b><br>
+                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r['Facturado']}</small><br>
+                            <small>{text_dias}</small>
                         </div>
                         <div style="text-align:right;">
                             <span class="{monto_clase}">{fmt(r['Saldo'])}</span>
@@ -156,13 +188,14 @@ if not df.empty:
             f_crea = st.date_input("Fecha Creación Ppto", datetime.now())
             f_ppto = st.text_input("Nro Presupuesto")
             f_cli = st.text_input("Nombre Cliente")
-            f_ven = st.selectbox("Vendedor", ["Jacqueline", "Jonathan", "Roberto"])
+            f_ven = st.selectbox("Vendedor", vendedores_lista)
             f_fac = st.selectbox("Estado Factura", ["Facturado", "No Facturado"])
             f_tot = st.number_input("Monto Total $", min_value=0.0, step=1000.0)
             f_ant = st.number_input("Anticipo Inicial $", min_value=0.0, step=1000.0)
             f_corp = st.checkbox("¿Es Cuenta Corporativa?")
             
             if st.form_submit_button("REGISTRAR"):
+                # Se mantiene la fecha de aprobación como la fecha actual del registro
                 f_apro = datetime.now().strftime("%Y-%m-%d %H:%M")
                 ws.append_row([f_crea.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, f_fac, f_apro, "SI" if f_corp else "NO"])
                 st.balloons(); st.rerun()
