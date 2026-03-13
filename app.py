@@ -43,11 +43,11 @@ def cargar_datos():
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
-        # Clave: Convertir a string y quitar decimales si los hay (.0)
+        
+        # LIMPIEZA EXTREMA PARA EL MATCH
+        # 1. Convertir a string. 2. Quitar el ".0" si existe. 3. Quitar espacios.
         df['Nro_Ppto_Match'] = df['Nro_Ppto'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
         
-        hoy = datetime.now()
-        df['Estado_Deuda'] = df.apply(lambda r: 'Viejo' if (hoy - r['Fecha']).days > 30 and r['Saldo'] > 0 else 'Joven', axis=1)
         return df, ws
     except Exception as e:
         st.error(f"Error Datos: {e}")
@@ -56,24 +56,17 @@ def cargar_datos():
 def consultar_jira():
     try:
         conf = st.secrets["jira"]
-        base_url = conf['url'].strip().rstrip('/')
-        api_url = f"{base_url}/rest/api/3/search"
+        api_url = f"{conf['url'].strip().rstrip('/')}/rest/api/3/search"
         auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
-        
-        # En V3 la estructura de fields es estricta
-        params = {
-            'jql': f'project="{conf["project_key"].strip()}"',
-            'fields': 'summary,status',
-            'maxResults': 100
-        }
+        params = {'jql': f'project="{conf["project_key"].strip()}"', 'fields': 'summary,status', 'maxResults': 100}
         
         res = requests.get(api_url, params=params, auth=auth, timeout=10)
         if res.status_code == 200:
             issues = res.json().get('issues', [])
-            # Mapeo: Summary -> Status Name
-            return {str(iss['fields']['summary']).strip(): iss['fields']['status']['name'] for iss in issues}
-    except Exception as e:
-        st.sidebar.error(f"Error Mapeo Jira: {e}")
+            # Limpiamos el summary de Jira igual que el del Excel
+            return {str(iss['fields']['summary']).replace(r'\.0$', '', regex=True).strip(): iss['fields']['status']['name'] for iss in issues}
+    except:
+        pass
     return {}
 
 # --- 3. DASHBOARD ---
@@ -87,7 +80,7 @@ if not df.empty:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("VENTAS TOTALES", f"${df['Monto_Total'].sum():,.0f}")
     c2.metric("COBRADO", f"${df['Anticipo'].sum():,.0f}")
-    c3.metric("DEUDA VIEJA", f"${df[df['Estado_Deuda']=='Viejo']['Saldo'].sum():,.0f}")
+    c3.metric("DEUDA", f"${df['Saldo'].sum():,.0f}")
     c4.metric("TICKETS JIRA", len(dict_jira))
 
     st.divider()
@@ -101,29 +94,28 @@ if not df.empty:
             cli = st.text_input("Cliente")
             ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto", "Distribuidor"])
             fac = st.selectbox("Condición Factura", ["Facturado", "Sin Facturar", "Pendiente"])
-            corp = st.checkbox("Cuenta Corporativa")
             f_ppto = st.date_input("Fecha Ppto")
             f_vta = st.date_input("Fecha Venta")
             tot = st.number_input("Monto Total $", step=1.0)
             ant = st.number_input("Anticipo $", step=1.0)
+            corp = st.checkbox("Cuenta Corporativa")
             
             if st.form_submit_button("REGISTRAR"):
-                # Orden: FechaPpto, Nro, Cliente, Total, Anticipo, Vendedor, Factura, FechaVenta, Corp
                 ws.append_row([f_ppto.strftime("%Y-%m-%d"), nro, cli, tot, ant, ven, fac, f_vta.strftime("%Y-%m-%d"), "SI" if corp else "NO"])
-                st.success("¡Venta cargada correctamente!")
-                st.rerun()
+                st.success("¡Venta cargada!"); st.rerun()
 
     with col_der:
-        st.subheader("📑 Cartera y Producción")
-        busc = st.text_input("🔍 Filtrar por nombre o número...")
+        st.subheader("📑 Cartera de Pedidos")
+        busc = st.text_input("🔍 Buscar por cliente o número...")
         df_v = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
         
-        for i, r in df_v.sort_values(by='Fecha', ascending=False).iterrows():
-            # Buscamos el estado usando el Match Limpiado
+        for i, r in df_v.sort_values(by='Nro_Ppto', ascending=False).iterrows():
             nro_match = r['Nro_Ppto_Match']
+            # Buscamos en el diccionario. Si no está, sale "Sin Ticket"
             est_j = dict_jira.get(nro_match, "Sin Ticket")
             
-            clase = "card-corp" if str(r.get('Corporativa','')).upper() == "SI" else "card-vendedor"
+            es_corp = str(r.get('Corporativa','')).upper() == "SI"
+            clase = "card-corp" if es_corp else "card-vendedor"
             
             st.markdown(f"""
                 <div class="{clase}">
@@ -131,11 +123,9 @@ if not df.empty:
                         <div style="flex:2;">
                             <span style="font-size:1.1rem; font-weight:bold;">{r['Cliente']}</span> 
                             <span class="status-badge">🛠 {est_j}</span><br>
-                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r.get('Facturado','-')}</small><br>
-                            <small>📅 {r['Fecha'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha']) else 'S/F'}</small>
+                            <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r.get('Facturado','-')}</small>
                         </div>
                         <div style="text-align:right; flex:1;">
-                            <small>SALDO</small><br>
                             <span class="monto-alerta">${r['Saldo']:,.0f}</span>
                         </div>
                     </div>
@@ -143,15 +133,9 @@ if not df.empty:
             """, unsafe_allow_html=True)
             
             with st.expander("Actualizar Pago"):
-                nuevo_ant = st.number_input("Cobrado hasta hoy", value=float(r['Anticipo']), key=f"upd_{i}")
+                nuevo_ant = st.number_input("Monto cobrado", value=float(r['Anticipo']), key=f"upd_{i}")
                 if st.button("Guardar", key=f"btn_{i}"):
-                    ws.update_cell(i+2, 5, nuevo_ant)
-                    st.rerun()
+                    ws.update_cell(i+2, 5, nuevo_ant); st.rerun()
 
-    # Gráfico
-    df_graf = df.dropna(subset=['Fecha']).copy()
-    df_graf['Mes'] = df_graf['Fecha'].dt.strftime('%Y-%m')
-    fig = px.line(df_graf.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Evolución de Ventas Mensuales", markers=True)
-    st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No se encontraron registros en el Google Sheets.")
+    st.info("Sin datos para mostrar.")
