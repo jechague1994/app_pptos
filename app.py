@@ -29,7 +29,7 @@ def conectar_gs():
         creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"Error Google Sheets: {e}")
+        st.error(f"Error Google: {e}")
         return None
 
 def cargar_datos():
@@ -43,6 +43,9 @@ def cargar_datos():
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
+        
+        # Limpieza clave: Convertimos Nro_Ppto a string limpio para comparar
+        df['Nro_Ppto_Limpiado'] = df['Nro_Ppto'].astype(str).str.strip()
         
         hoy = datetime.now()
         df['Estado_Deuda'] = df.apply(lambda r: 'Viejo' if (hoy - r['Fecha']).days > 30 and r['Saldo'] > 0 else 'Joven', axis=1)
@@ -60,49 +63,50 @@ def consultar_jira():
         res = requests.get(url, params=query, auth=auth, timeout=10)
         if res.status_code == 200:
             issues = res.json().get('issues', [])
+            # Limpiamos el título de Jira para que el cruce sea exacto
             return {str(iss['fields']['summary']).strip(): iss['fields']['status']['name'] for iss in issues}
     except:
         pass
     return {}
 
-# --- 3. BARRA LATERAL (DIAGNÓSTICO MEJORADO) ---
+# --- 3. BARRA LATERAL (DIAGNÓSTICO) ---
 with st.sidebar:
     st.header("🛠 Diagnóstico Jira")
     if st.button("Ejecutar Test"):
         conf = st.secrets["jira"]
         base = conf['url'].strip().rstrip('/')
-        st.write(f"Conectando a: {base}")
         try:
             auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
-            # Test de Usuario
             res = requests.get(f"{base}/rest/api/2/myself", auth=auth)
             if res.status_code == 200:
-                st.success(f"✅ Usuario OK: {res.json().get('displayName')}")
-                # Test de Proyecto
-                res2 = requests.get(f"{base}/rest/api/2/project/{conf['project_key']}", auth=auth)
-                if res2.status_code == 200:
-                    st.success(f"✅ Proyecto '{conf['project_key']}' encontrado")
+                st.success("✅ Conexión OK")
+                search_url = f"{base}/rest/api/2/search"
+                q = {'jql': f'project="{conf["project_key"]}"', 'maxResults': 5}
+                res_q = requests.get(search_url, params=q, auth=auth)
+                if res_q.status_code == 200:
+                    tickets = res_q.json().get('issues', [])
+                    st.info(f"Tickets encontrados: {len(tickets)}")
+                    for t in tickets:
+                        st.write(f"- {t['fields']['summary']}")
                 else:
-                    st.error(f"❌ Proyecto no encontrado ({res2.status_code})")
+                    st.error(f"Error búsqueda: {res_q.status_code}")
             else:
-                st.error(f"❌ Error {res.status_code}. Revisa la URL y el Token en Secrets.")
-                if res.status_code == 404:
-                    st.warning("⚠️ El error 404 indica que la URL de Jira es incorrecta.")
+                st.error(f"Error {res.status_code}")
         except Exception as e:
-            st.error(f"Error de conexión: {e}")
+            st.error(f"Error: {e}")
 
 # --- 4. DASHBOARD ---
 df, ws = cargar_datos()
 dict_jira = consultar_jira()
 
 if not df.empty:
-    st.title("🚀 Magallan Gestión")
+    st.title("🚀 Gestión Magallan")
     
     # Métricas
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("VENTAS TOTALES", f"${df['Monto_Total'].sum():,.0f}")
-    c2.metric("DEUDA VIEJA", f"${df[df['Estado_Deuda']=='Viejo']['Saldo'].sum():,.0f}")
-    c3.metric("COBRADO", f"${df['Anticipo'].sum():,.0f}")
+    c1.metric("VENTAS", f"${df['Monto_Total'].sum():,.0f}")
+    c2.metric("COBRADO", f"${df['Anticipo'].sum():,.0f}")
+    c3.metric("DEUDA VIEJA", f"${df[df['Estado_Deuda']=='Viejo']['Saldo'].sum():,.0f}")
     c4.metric("JIRA TICKETS", len(dict_jira))
 
     st.divider()
@@ -112,7 +116,7 @@ if not df.empty:
     with col_izq:
         st.subheader("📝 Nuevo Pedido")
         with st.form("alta"):
-            nro = st.text_input("Nro Ppto (ID Jira)")
+            nro = st.text_input("Nro Ppto (Igual a Jira)")
             cli = st.text_input("Cliente")
             ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto", "Distribuidor"])
             fac = st.selectbox("Facturación", ["Facturado", "Sin Facturar", "Pendiente"])
@@ -132,33 +136,37 @@ if not df.empty:
         df_v = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
         
         for i, r in df_v.sort_values(by='Fecha', ascending=False).iterrows():
-            est_j = dict_jira.get(str(r['Nro_Ppto']).strip(), "Sin Ticket")
-            clase = "card-corp" if str(r.get('Corporativa','')).upper() == "SI" else "card-vendedor"
+            # Buscamos usando el Nro_Ppto limpiado
+            nro_limpio = str(r['Nro_Ppto_Limpiado'])
+            est_j = dict_jira.get(nro_limpio, "Sin Ticket")
+            
+            es_corp = str(r.get('Corporativa','')).upper() == "SI"
+            clase = "card-corp" if es_corp else "card-vendedor"
             
             st.markdown(f"""
                 <div class="{clase}">
                     <div style="display:flex; justify-content:space-between;">
-                        <div>
-                            <b>{r['Cliente']}</b> <span class="status-badge">{est_j}</span><br>
+                        <div style="flex:2;">
+                            <b>{r['Cliente']}</b> <span class="status-badge">🛠 {est_j}</span><br>
                             <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']} | {r.get('Facturado','-')}</small><br>
                             <small>📅 {r['Fecha'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha']) else ''}</small>
                         </div>
-                        <div style="text-align:right;">
+                        <div style="text-align:right; flex:1;">
                             <span class="monto-alerta">${r['Saldo']:,.0f}</span>
                         </div>
                     </div>
                 </div>
             """, unsafe_allow_html=True)
             
-            with st.expander("Actualizar Cobro"):
-                nuevo = st.number_input("Total cobrado", value=float(r['Anticipo']), key=f"u{i}")
+            with st.expander("Actualizar"):
+                nuevo = st.number_input("Cobrado", value=float(r['Anticipo']), key=f"u{i}")
                 if st.button("OK", key=f"b{i}"):
                     ws.update_cell(i+2, 5, nuevo); st.rerun()
 
     # Gráfico mensual
-    df['Mes'] = df['Fecha'].dt.strftime('%Y-%m')
-    fig = px.line(df.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Ventas por Mes", markers=True)
+    df_graf = df.dropna(subset=['Fecha']).copy()
+    df_graf['Mes'] = df_graf['Fecha'].dt.strftime('%Y-%m')
+    fig = px.line(df_graf.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Ventas por Mes", markers=True)
     st.plotly_chart(fig, use_container_width=True)
-
 else:
-    st.info("Conecta la base de datos para empezar.")
+    st.info("No hay datos cargados.")
