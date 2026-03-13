@@ -155,4 +155,4 @@ if not df.empty:
                     # Columnas C(3) y D(4) en el Excel antiguo, ahora son D(4) y E(5) por la columna Fecha
                     ws.update_cell(i+2, 4, u_tot)
                     ws.update_cell(i+2, 5, u_ant)
-                    st.rerun(
+                    st.rerun()
