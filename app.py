@@ -2,136 +2,157 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
+import plotly.express as px
+from datetime import datetime
 
-# --- 1. CONFIGURACIÓN VISUAL ---
-st.set_page_config(page_title="Magallan - Gestión de Saldos", layout="wide")
+# --- 1. CONFIGURACIÓN E INTERFAZ ---
+st.set_page_config(page_title="Magallan Enterprise - Control Total", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #F8FAFC; color: #1E293B; }
+    .stApp { background-color: #F1F5F9; }
+    .main-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    .metric-box { background: #FFFFFF; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; text-align: center; }
     .panel-saldos {
         background: white; border: 1px solid #E2E8F0; border-left: 6px solid #0284C7;
-        border-radius: 8px; padding: 15px; margin-bottom: 5px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        border-radius: 8px; padding: 15px; margin-bottom: 8px;
     }
-    .monto-deuda { color: #E11D48; font-size: 1.4rem; font-weight: bold; }
-    .monto-ok { color: #10B981; font-size: 1.4rem; font-weight: bold; }
-    .vendedor-tag { 
-        background-color: #F1F5F9; color: #475569; 
-        padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;
-    }
-    [data-testid="stMetricValue"] { color: #0284C7; }
+    .monto-deuda { color: #E11D48; font-size: 1.1rem; font-weight: 700; }
+    .monto-ok { color: #10B981; font-size: 1.1rem; font-weight: 700; }
+    .vendedor-tag { background: #E0E7FF; color: #4338CA; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIÓN A GOOGLE SHEETS ---
-@st.cache_resource(ttl=600)
+# --- 2. CONEXIÓN ROBUSTA ---
+@st.cache_resource(ttl=60)
 def conectar_gs():
     try:
         return gspread.authorize(Credentials.from_service_account_info(
             st.secrets["gcp_service_account"], 
             scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
         ))
-    except Exception as e:
-        st.error("Error de conexión con Google Sheets.")
-        return None
+    except: return None
 
 def obtener_datos():
     gc = conectar_gs()
-    if gc:
-        try:
-            sh = gc.open("Gestion_Magallan")
-            try:
-                ws = sh.worksheet("Saldos_Simples")
-            except:
-                ws = sh.add_worksheet(title="Saldos_Simples", rows="1000", cols="5")
-                ws.append_row(["Nro_Ppto", "Cliente", "Monto_Total", "Anticipo", "Vendedor"])
+    if not gc: return pd.DataFrame(), None
+    try:
+        sh = gc.open("Gestion_Magallan")
+        ws = sh.worksheet("Saldos_Simples")
+        df = pd.DataFrame(ws.get_all_records())
+        
+        # Validación de columnas para evitar errores de carga
+        cols = ['Fecha', 'Nro_Ppto', 'Cliente', 'Monto_Total', 'Anticipo', 'Vendedor']
+        for c in cols:
+            if c not in df.columns: df[c] = ""
             
-            df = pd.DataFrame(ws.get_all_records())
-            # Asegurar que la columna Vendedor existe en el DF aunque el Excel sea viejo
-            if 'Vendedor' not in df.columns:
-                df['Vendedor'] = "Sin asignar"
-            return df, ws
-        except Exception as e:
-            st.error(f"Error al obtener datos: {e}")
-    return pd.DataFrame(), None
+        # Limpieza de datos
+        df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
+        df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
+        df['Saldo'] = df['Monto_Total'] - df['Anticipo']
+        df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+        return df, ws
+    except: return pd.DataFrame(), None
 
-# --- 3. INTERFAZ ---
-st.title("📊 Control de Saldos Magallan")
-
+# --- 3. LOGICA DE LA APP ---
 df, ws = obtener_datos()
 
-# MÉTRICAS GENERALES
+st.title("🚀 Magallan: Control de Gestión & Rendimiento")
+
 if not df.empty:
-    df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
-    df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
-    df['Saldo'] = df['Monto_Total'] - df['Anticipo']
+    # --- FILTROS DE DASHBOARD ---
+    with st.sidebar:
+        st.header("⚙️ Filtros de Análisis")
+        meses = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+        sel_mes = st.multiselect("Filtrar por Mes", options=list(meses.keys()), format_func=lambda x: meses[x], default=list(meses.keys()))
+        
+        # Aplicar filtro
+        df_view = df[df['Fecha'].dt.month.isin(sel_mes)] if not df['Fecha'].isnull().all() else df
+        
+    # --- MÉTRICAS ---
+    m1, m2, m3, m4 = st.columns(4)
+    total_v = df_view['Monto_Total'].sum()
+    total_c = df_view['Anticipo'].sum()
+    total_p = df_view['Saldo'].sum()
+    eficacia = (total_c / total_v * 100) if total_v > 0 else 0
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("TOTAL PRESUPUESTADO", f"${df['Monto_Total'].sum():,.0f}")
-    c2.metric("COBRADO TOTAL", f"${df['Anticipo'].sum():,.0f}")
-    c3.metric("SALDO PENDIENTE", f"${df['Saldo'].sum():,.0f}")
+    m1.metric("VENTAS PERIODO", f"${total_v:,.0f}")
+    m2.metric("COBRADO", f"${total_c:,.0f}")
+    m3.metric("A COBRAR", f"${total_p:,.0f}", delta=f"{total_p:,.0f}", delta_color="inverse")
+    m4.metric("EFICACIA COBRO", f"{eficacia:.1f}%")
+
+    # --- GRÁFICOS ---
+    st.subheader("📊 Rendimiento por Vendedor")
+    
+    rend_vendedor = df_view.groupby('Vendedor').agg({
+        'Monto_Total': 'sum',
+        'Anticipo': 'sum',
+        'Saldo': 'sum'
+    }).reset_index()
+
+    c_g1, c_g2 = st.columns([2, 1])
+    
+    with c_g1:
+        fig = px.bar(rend_vendedor, x='Vendedor', y=['Anticipo', 'Saldo'], 
+                     title="Cobrado vs Pendiente por Vendedor",
+                     barmode='group', color_discrete_sequence=['#10B981', '#E11D48'])
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c_g2:
+        fig_pie = px.pie(rend_vendedor, values='Monto_Total', names='Vendedor', 
+                         title="% Participación en Ventas", hole=0.4)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
     st.divider()
 
-col_izq, col_der = st.columns([1, 2.2])
+    # --- CARGA Y LISTADO ---
+    col_f, col_l = st.columns([1, 2])
 
-with col_izq:
-    st.subheader("➕ Cargar Ppto")
-    with st.form("nuevo_ppto", clear_on_submit=True):
-        n = st.text_input("Nro MAG#")
-        cl = st.text_input("Cliente")
-        # Vendedores actualizados
-        vendedor = st.selectbox("Seleccionar Vendedor", ["Jonathan", "Jacqueline", "Roberto"])
-        mt = st.number_input("Monto Total ($)", min_value=0.0)
-        an = st.number_input("Anticipo ($)", min_value=0.0)
-        
-        if st.form_submit_button("REGISTRAR", use_container_width=True):
-            if n and cl:
-                ws.append_row([n, cl, mt, an, vendedor])
-                st.success("¡Registrado con éxito!")
-                st.rerun()
+    with col_f:
+        st.subheader("➕ Nuevo Presupuesto")
+        with st.form("form_completo", clear_on_submit=True):
+            f_nro = st.text_input("Nro MAG#")
+            f_cli = st.text_input("Cliente")
+            f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto"])
+            f_tot = st.number_input("Monto Total ($)", min_value=0.0)
+            f_ant = st.number_input("Anticipo Inicial ($)", min_value=0.0)
+            f_fec = st.date_input("Fecha de Venta", value=datetime.now())
+            
+            if st.form_submit_button("REGISTRAR EN EXCEL"):
+                if f_nro and f_cli:
+                    ws.append_row([f_fec.strftime("%Y-%m-%d"), f_nro, f_cli, f_tot, f_ant, f_ven])
+                    st.success("Guardado!")
+                    st.rerun()
 
-with col_der:
-    st.subheader("📋 Listado de Saldos")
-    if not df.empty:
-        busc = st.text_input("🔍 Buscar por Cliente, MAG# o Vendedor...")
-        # Buscador que revisa en todas las columnas
-        df_ver = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
+    with col_l:
+        st.subheader("📋 Gestión de Saldos")
+        buscar = st.text_input("🔍 Buscar cliente o MAG#...")
+        df_list = df_view[df_view.apply(lambda r: buscar.lower() in str(r.values).lower(), axis=1)] if buscar else df_view
         
-        for i, r in df_ver.iterrows():
-            saldo_r = r['Saldo']
-            color_borde = '#E11D48' if saldo_r > 0 else '#10B981'
+        for i, r in df_list.sort_values(by='Fecha', ascending=False).iterrows():
+            badge = "monto-ok" if r['Saldo'] <= 0 else "monto-deuda"
+            f_str = r['Fecha'].strftime('%d/%m/%y') if not pd.isnull(r['Fecha']) else "S/F"
             
             st.markdown(f"""
-            <div class="panel-saldos" style="border-left-color: {color_borde};">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <b>MAG-{r['Nro_Ppto']} | {r['Cliente']}</b> 
-                        <span class="vendedor-tag">👤 {r['Vendedor']}</span><br>
-                        <small>Total: ${r['Monto_Total']:,.0f} | Cobrado: ${r['Anticipo']:,.0f}</small>
-                    </div>
-                    <div style="text-align:right;">
-                        <span class="{'monto-deuda' if saldo_r > 0 else 'monto-ok'}">
-                            {f'Debe: ${saldo_r:,.0f}' if saldo_r > 0 else 'Saldado'}
-                        </span>
+                <div class="panel-saldos" style="border-left-color: {'#10B981' if r['Saldo'] <= 0 else '#E11D48'}">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div>
+                            <b>MAG-{r['Nro_Ppto']} | {r['Cliente']}</b> <span class="vendedor-tag">{r['Vendedor']}</span><br>
+                            <small>📅 {f_str} | Total: ${r['Monto_Total']:,.0f} | Cobrado: ${r['Anticipo']:,.0f}</small>
+                        </div>
+                        <div class="{badge}">
+                            {'$' + str(f"{r['Saldo']:,.0f}") if r['Saldo'] > 0 else 'SALDADO'}
+                        </div>
                     </div>
                 </div>
-            </div>
             """, unsafe_allow_html=True)
             
-            with st.expander(f"✏️ Editar Montos de MAG-{r['Nro_Ppto']}"):
-                ec1, ec2, ec3 = st.columns([1.5, 1.5, 1])
-                nuevo_t = ec1.number_input("Modificar Total ($)", value=float(r['Monto_Total']), key=f"t{i}")
-                nuevo_a = ec2.number_input("Actualizar Anticipo ($)", value=float(r['Anticipo']), key=f"a{i}")
-                
-                # Recordatorio de vendedor (no editable)
-                st.caption(f"Vendedor asignado: {r['Vendedor']}")
-                
-                if ec3.button("Guardar", key=f"b{i}", use_container_width=True):
-                    # Actualizar celdas en C (3) y D (4)
-                    ws.update_cell(i + 2, 3, nuevo_t)
-                    ws.update_cell(i + 2, 4, nuevo_a)
-                    st.rerun()
-            st.write("")
-    else:
-        st.info("Todavía no hay presupuestos cargados.")
+            with st.expander(f"Actualizar PAGOS / MONTOS de {r['Cliente']}"):
+                ec1, ec2, ec3 = st.columns(3)
+                u_tot = ec1.number_input("Monto Total", value=float(r['Monto_Total']), key=f"ut{i}")
+                u_ant = ec2.number_input("Anticipo", value=float(r['Anticipo']), key=f"ua{i}")
+                if ec3.button("Guardar", key=f"ub{i}"):
+                    # Columnas C(3) y D(4) en el Excel antiguo, ahora son D(4) y E(5) por la columna Fecha
+                    ws.update_cell(i+2, 4, u_tot)
+                    ws.update_cell(i+2, 5, u_ant)
+                    st.rerun(
