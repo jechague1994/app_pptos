@@ -45,74 +45,69 @@ def cargar_datos():
         st.error(f"Error al leer datos: {e}")
         return pd.DataFrame(), None
 
-# --- 3. LÓGICA Y FILTROS ---
+# --- 3. PROCESAMIENTO ---
 df, ws = cargar_datos()
 
 if not df.empty:
     # --- BARRA LATERAL (FILTROS) ---
-    st.sidebar.header("🔍 Filtros de Visualización")
+    st.sidebar.header("🔍 Filtros de Gestión")
     
-    # Filtro de Vendedor
-    lista_vendedores = ["Todos"] + sorted(list(df['Vendedor'].unique()))
-    vendedor_sel = st.sidebar.selectbox("Seleccionar Vendedor", lista_vendedores)
+    # Filtro Dinámico de Vendedores (Sin "Distribuidor")
+    lista_vendedores = ["Todos"] + sorted([v for v in df['Vendedor'].unique() if v and v != "Distribuidor"])
+    vendedor_sel = st.sidebar.selectbox("Vendedor Responsable", lista_vendedores)
     
     # Filtro de Fechas
     fecha_min = df['Fecha'].min().date() if not df['Fecha'].isnull().all() else datetime.now().date()
-    fecha_max = datetime.now().date()
-    rango_fecha = st.sidebar.date_input("Rango de Fechas", [fecha_min, fecha_max])
+    rango_fecha = st.sidebar.date_input("Periodo de Tiempo", [fecha_min, datetime.now().date()])
 
-    # Aplicar Filtros
+    # Aplicación de Filtros
     df_f = df.copy()
     if vendedor_sel != "Todos":
         df_f = df_f[df_f['Vendedor'] == vendedor_sel]
     if len(rango_fecha) == 2:
         df_f = df_f[(df_f['Fecha'].dt.date >= rango_fecha[0]) & (df_f['Fecha'].dt.date <= rango_fecha[1])]
 
-    st.title(f"📊 Dashboard Magallan")
-    if vendedor_sel != "Todos":
-        st.caption(f"Filtrado por: {vendedor_sel}")
+    st.title("📊 Panel Magallan Intelligence")
 
     # --- MÉTRICAS ---
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("VENTAS TOTALES", f"${df_f['Monto_Total'].sum():,.0f}")
-    m2.metric("TOTAL COBRADO", f"${df_f['Anticipo'].sum():,.0f}")
-    m3.metric("SALDO PENDIENTE", f"${df_f['Saldo'].sum():,.0f}", delta_color="inverse")
-    m4.metric("N° OPERACIONES", len(df_f))
+    m2.metric("COBRADO", f"${df_f['Anticipo'].sum():,.0f}")
+    m3.metric("DEUDA TOTAL", f"${df_f['Saldo'].sum():,.0f}", delta_color="inverse")
+    m4.metric("OPERACIONES", len(df_f))
 
     st.divider()
 
-    # --- SECCIÓN DE GRÁFICOS ---
+    # --- GRÁFICOS ---
     g1, g2, g3 = st.columns(3)
-
     with g1:
-        # Participación por Vendedor (Torta)
-        fig_p = px.pie(df_f, values='Monto_Total', names='Vendedor', title="Ventas por Vendedor", hole=0.4)
+        # Participación real por vendedor
+        fig_p = px.pie(df_f[df_f['Vendedor'] != "Distribuidor"], values='Monto_Total', names='Vendedor', 
+                         title="Cuota de Venta por Persona", hole=0.4)
         st.plotly_chart(fig_p, use_container_width=True)
-
     with g2:
-        # Estado Facturación (Barras) - TERMINOLOGÍA CORREGIDA
+        # Barras de Facturación
         df_fac = df_f.groupby('Facturado')['Monto_Total'].sum().reset_index()
         fig_b = px.bar(df_fac, x='Facturado', y='Monto_Total', color='Facturado', 
-                       title="Monto Facturado vs No Facturado",
+                       title="Estado: Facturado vs No Facturado",
                        color_discrete_map={"Facturado": "#00CC96", "No Facturado": "#EF553B"})
         st.plotly_chart(fig_b, use_container_width=True)
-
     with g3:
-        # Tendencia Temporal (Área)
+        # Línea de tiempo
         df_t = df_f.dropna(subset=['Fecha']).sort_values('Fecha')
         df_t['Mes'] = df_t['Fecha'].dt.strftime('%b %y')
         df_res = df_t.groupby('Mes')['Monto_Total'].sum().reset_index()
-        fig_a = px.area(df_res, x='Mes', y='Monto_Total', title="Evolución de Ventas", markers=True)
+        fig_a = px.area(df_res, x='Mes', y='Monto_Total', title="Evolución del Ingreso", markers=True)
         st.plotly_chart(fig_a, use_container_width=True)
 
     st.divider()
 
-    # --- SECCIÓN OPERATIVA (ABAJO) ---
+    # --- LISTADO Y FORMULARIO ---
     col_l, col_r = st.columns([1.8, 1.2])
 
     with col_l:
-        st.subheader("📑 Gestión de Cartera")
-        busc = st.text_input("🔍 Buscar cliente o ppto...")
+        st.subheader("📑 Cartera de Clientes")
+        busc = st.text_input("🔍 Buscar cliente...")
         df_v = df_f[df_f.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_f
         
         for i, r in df_v.sort_values(by='Fecha', ascending=False).iterrows():
@@ -131,29 +126,27 @@ if not df.empty:
                 </div>
             """, unsafe_allow_html=True)
             
-            with st.expander(f"Actualizar saldo: {r['Cliente']}"):
-                nv = st.number_input("Total cobrado hoy", value=float(r['Anticipo']), key=f"pay_{i}")
-                if st.button("Guardar en Excel", key=f"btn_{i}"):
+            with st.expander(f"Actualizar cobro"):
+                nv = st.number_input("Total cobrado", value=float(r['Anticipo']), key=f"pay_{i}")
+                if st.button("Guardar Cambios", key=f"btn_{i}"):
                     ws.update_cell(i+2, 5, nv)
-                    st.success("¡Planilla actualizada!")
+                    st.success("¡Venta actualizada!")
                     st.rerun()
 
     with col_r:
-        st.subheader("📝 Nueva Venta")
+        st.subheader("📝 Registrar Venta")
         with st.form("alta_vta", clear_on_submit=True):
             f_ppto = st.text_input("Nro Presupuesto")
             f_cli = st.text_input("Nombre Cliente")
-            f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto", "Distribuidor"])
-            # OPCIONES CORREGIDAS SEGÚN TU SOLICITUD
+            # LISTA DE VENDEDORES LIMPIA:
+            f_ven = st.selectbox("Vendedor Responsable", ["Jonathan", "Jacqueline", "Roberto"])
             f_fac = st.selectbox("Estado de Factura", ["Facturado", "No Facturado"])
             f_tot = st.number_input("Monto Total $", min_value=0.0)
             f_ant = st.number_input("Anticipo $", min_value=0.0)
-            f_corp = st.checkbox("Cuenta Corporativa")
+            f_corp = st.checkbox("¿Es Cuenta Corporativa?")
             
-            if st.form_submit_button("REGISTRAR VENTA"):
+            if st.form_submit_button("REGISTRAR EN EL SISTEMA"):
                 hoy = datetime.now().strftime("%Y-%m-%d")
                 ws.append_row([hoy, f_ppto, f_cli, f_tot, f_ant, f_ven, f_fac, hoy, "SI" if f_corp else "NO"])
                 st.balloons()
                 st.rerun()
-else:
-    st.info("Conectado. Esperando datos del Excel para mostrar gráficos.")
