@@ -8,6 +8,13 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
 
+# Definición de la paleta Magallan
+COLORES_VENDEDORES = {
+    "Jacqueline": "#FF69B4", # Rosa
+    "Jonathan": "#3b82f6",   # Azul
+    "Roberto": "#22c55e"     # Verde
+}
+
 st.markdown("""
 <style>
     [data-testid="stMetric"] { background: white; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
@@ -56,8 +63,8 @@ df, ws = cargar_datos()
 
 if not df.empty:
     st.sidebar.header("🔍 Filtros")
-    vendedores = ["Todos"] + sorted([v for v in df['Vendedor'].unique() if v and v != "Distribuidor"])
-    v_sel = st.sidebar.selectbox("Vendedor", vendedores)
+    vendedores_lista = sorted([v for v in df['Vendedor'].unique() if v and v != "Distribuidor"])
+    v_sel = st.sidebar.selectbox("Vendedor", ["Todos"] + vendedores_lista)
     
     df_f = df.copy()
     if v_sel != "Todos":
@@ -68,31 +75,47 @@ if not df.empty:
     # MÉTRICAS
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("VENTAS TOTALES", fmt(df_f['Monto_Total'].sum()))
-    m2.metric("RECAUDADO (Anticipos)", fmt(df_f['Anticipo'].sum()))
+    m2.metric("RECAUDADO", fmt(df_f['Anticipo'].sum()))
     m3.metric("DEUDA TOTAL", fmt(df_f['Saldo'].sum()), delta_color="inverse")
     avg_dias = df_f['Dias_Cierre'].mean()
     m4.metric("VELOCIDAD CIERRE", f"{avg_dias:.1f} días" if not pd.isna(avg_dias) else "0 días")
 
     st.divider()
 
-    # GRÁFICOS
+    # --- GRÁFICOS CON COLORES FIJOS ---
     g1, g2, g3 = st.columns(3)
+    
     with g1:
-        # Ranking de Cobradores (Quién recaudó más anticipos)
-        df_rank = df_f.groupby('Vendedor')['Anticipo'].sum().reset_index().sort_values('Anticipo', ascending=True)
-        fig_r = px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', title="Ranking de Cobranza ($)", color='Anticipo', color_continuous_scale='Viridis')
-        st.plotly_chart(fig_r, use_container_width=True)
+        # Dona: Participación de Ventas
+        fig_vendedores = px.pie(df_f, values='Monto_Total', names='Vendedor', 
+                                title="Ventas por Vendedor (%)",
+                                hole=0.5, 
+                                color='Vendedor',
+                                color_discrete_map=COLORES_VENDEDORES)
+        fig_vendedores.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_vendedores, use_container_width=True)
+        
     with g2:
-        df_fac = df_f.groupby('Facturado')['Monto_Total'].sum().reset_index()
-        st.plotly_chart(px.bar(df_fac, x='Facturado', y='Monto_Total', color='Facturado', title="Facturado vs No Facturado"), use_container_width=True)
+        # Torta: Estado de Facturación (Colores semánticos)
+        fig_facturacion = px.pie(df_f, values='Monto_Total', names='Facturado', 
+                                 title="Estado de Facturación",
+                                 color='Facturado',
+                                 color_discrete_map={"Facturado": "#2ecc71", "No Facturado": "#e74c3c"})
+        fig_facturacion.update_traces(textinfo='percent+value')
+        st.plotly_chart(fig_facturacion, use_container_width=True)
+        
     with g3:
-        df_t = df_f.dropna(subset=['Fecha_Aprobacion']).sort_values('Fecha_Aprobacion')
-        df_t['Mes'] = df_t['Fecha_Aprobacion'].dt.strftime('%b %y')
-        st.plotly_chart(px.area(df_t.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Evolución Mensual"), use_container_width=True)
+        # Ranking de Cobranza con colores fijos
+        df_rank = df_f.groupby('Vendedor')['Anticipo'].sum().reset_index().sort_values('Anticipo', ascending=True)
+        fig_rank = px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', 
+                          title="Ranking de Recaudación ($)",
+                          color='Vendedor',
+                          color_discrete_map=COLORES_VENDEDORES)
+        st.plotly_chart(fig_rank, use_container_width=True)
 
     st.divider()
 
-    # OPERATIVA
+    # --- OPERATIVA ---
     col_l, col_r = st.columns([1.7, 1.3])
 
     with col_l:
@@ -133,7 +156,7 @@ if not df.empty:
             f_crea = st.date_input("Fecha Creación Ppto", datetime.now())
             f_ppto = st.text_input("Nro Presupuesto")
             f_cli = st.text_input("Nombre Cliente")
-            f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto"])
+            f_ven = st.selectbox("Vendedor", ["Jacqueline", "Jonathan", "Roberto"])
             f_fac = st.selectbox("Estado Factura", ["Facturado", "No Facturado"])
             f_tot = st.number_input("Monto Total $", min_value=0.0, step=1000.0)
             f_ant = st.number_input("Anticipo Inicial $", min_value=0.0, step=1000.0)
@@ -144,4 +167,4 @@ if not df.empty:
                 ws.append_row([f_crea.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, f_fac, f_apro, "SI" if f_corp else "NO"])
                 st.balloons(); st.rerun()
 else:
-    st.warning("No hay datos. Asegúrate de que el Excel tenga los encabezados correctos.")
+    st.warning("Sin datos. Revisa los encabezados de tu Excel.")
