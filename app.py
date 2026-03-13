@@ -54,49 +54,69 @@ def cargar_datos():
         st.error(f"Error al leer Excel: {e}")
         return pd.DataFrame(), None
 
-# --- ESTA ES LA PARTE QUE DEBES REVISAR ---
 def consultar_jira():
     try:
         conf = st.secrets["jira"]
-        # Limpieza de URL para evitar Error 410
         base_url = conf['url'].strip().rstrip('/')
         api_url = f"{base_url}/rest/api/2/search"
-        
         auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
-        
-        query = {
-            'jql': f'project="{conf["project_key"]}"',
-            'fields': 'summary,status',
-            'maxResults': 100
-        }
-        
+        query = {'jql': f'project="{conf["project_key"]}"', 'fields': 'summary,status', 'maxResults': 100}
         res = requests.get(api_url, params=query, auth=auth, timeout=10)
-        
         if res.status_code == 200:
             issues = res.json().get('issues', [])
-            # Mapeo directo: lo que dice el título del ticket = Estado
             return {str(iss['fields']['summary']).strip(): iss['fields']['status']['name'] for iss in issues}
-        else:
-            st.sidebar.error(f"Jira Error {res.status_code}. Revisa la URL en Secrets.")
-            return {}
-    except Exception as e:
-        st.sidebar.warning(f"Error de red Jira: {e}")
+        return {}
+    except:
         return {}
 
-# --- 3. LÓGICA DE LA APP ---
+# --- 3. BARRA LATERAL (TEST DE CONEXIÓN) ---
+with st.sidebar:
+    st.header("🛠 Diagnóstico")
+    if st.button("Testear Conexión Jira"):
+        try:
+            conf = st.secrets["jira"]
+            base_url = conf['url'].strip().rstrip('/')
+            test_url = f"{base_url}/rest/api/2/myself" # Endpoint simple para validar credenciales
+            auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
+            
+            st.write(f"Probando URL: {base_url}")
+            res = requests.get(test_url, auth=auth, timeout=10)
+            
+            if res.status_code == 200:
+                st.success("✅ ¡Conexión Exitosa!")
+                st.write(f"Usuario validado: {res.json().get('displayName')}")
+                
+                # Probar búsqueda de tickets
+                search_url = f"{base_url}/rest/api/2/search"
+                q = {'jql': f'project="{conf["project_key"]}"', 'maxResults': 1}
+                res_q = requests.get(search_url, params=q, auth=auth)
+                if res_q.status_code == 200:
+                    count = res_q.json().get('total', 0)
+                    st.info(f"Tickets encontrados en proyecto {conf['project_key']}: {count}")
+                else:
+                    st.error(f"Error al buscar tickets: {res_q.status_code}")
+            elif res.status_code == 401:
+                st.error("❌ Error 401: Token o Usuario inválido.")
+            elif res.status_code == 404:
+                st.error("❌ Error 404: La URL no es correcta.")
+            else:
+                st.error(f"❌ Error {res.status_code}: {res.text}")
+        except Exception as e:
+            st.error(f"Fallo crítico: {e}")
 
+# --- 4. LÓGICA PRINCIPAL ---
 df, ws = cargar_datos()
 dict_jira = consultar_jira()
 
 if not df.empty:
     st.title("🚀 Magallan Sistema Integrado")
     
-    # Métricas superiores
+    # Métricas
     t1, t2, t3, t4 = st.columns(4)
     t1.metric("VENTAS TOTALES", f"${df['Monto_Total'].sum():,.0f}")
     t2.metric("COBRADO", f"${df['Anticipo'].sum():,.0f}")
     t3.metric("DEUDA VIEJA (>30d)", f"${df[df['Estado_Deuda']=='Viejo']['Saldo'].sum():,.0f}")
-    t4.metric("TICKETS TALLER", len(dict_jira))
+    t4.metric("TICKETS JIRA", len(dict_jira))
 
     st.divider()
 
@@ -160,13 +180,9 @@ if not df.empty:
                     ws.update_cell(i+2, 5, nuevo_pago)
                     st.rerun()
 
-    # --- 4. GRÁFICO MENSUAL ---
     st.divider()
     df_mes = df.copy()
     df_mes['Mes'] = df_mes['Fecha'].dt.strftime('%Y-%m')
     df_grafico = df_mes.groupby('Mes')['Monto_Total'].sum().reset_index()
     fig = px.line(df_grafico, x='Mes', y='Monto_Total', title="Evolución de Ventas Mensuales ($)", markers=True)
     st.plotly_chart(fig, use_container_width=True)
-
-else:
-    st.warning("Verifica la conexión a Google Sheets o el nombre de la pestaña.")
