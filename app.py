@@ -7,139 +7,226 @@ from datetime import datetime
 import requests
 from requests.auth import HTTPBasicAuth
 
-# --- 1. CONFIGURACIÓN Y ESTILOS ---
-st.set_page_config(page_title="Magallan ERP + Jira", layout="wide")
+# --- 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
+st.set_page_config(page_title="Magallan Sistema Integrado", layout="wide", page_icon="📊")
 
 st.markdown("""
     <style>
-    .stApp { background-color: #F8FAFC; }
-    .card-vendedor { background: white; border: 1px solid #E2E8F0; border-left: 6px solid #0284C7; border-radius: 12px; padding: 18px; margin-bottom: 12px; }
-    .card-corp { background: #F1F5F9; border: 1px solid #CBD5E1; border-left: 6px solid #1E293B; border-radius: 12px; padding: 18px; margin-bottom: 12px; }
-    .monto-deuda { color: #E11D48; font-size: 1.2rem; font-weight: 800; }
-    .monto-ok { color: #10B981; font-size: 1.2rem; font-weight: 800; }
-    .tag { padding: 3px 8px; border-radius: 5px; font-size: 0.7rem; font-weight: 700; margin-right: 5px; }
-    .tag-jira { background: #E9ECEF; color: #495057; border: 1px solid #CED4DA; }
-    .tag-vend { background: #EEF2FF; color: #4338CA; }
-    .tag-corp { background: #1E293B; color: white; }
+    /* Estilo General */
+    .stApp { background-color: #F1F5F9; }
+    
+    /* Tarjetas de Clientes */
+    .card-vendedor { 
+        background: white; 
+        border-radius: 10px; 
+        padding: 15px; 
+        margin-bottom: 12px; 
+        border-left: 6px solid #3B82F6; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .card-corp { 
+        background: #F8FAFC; 
+        border-radius: 10px; 
+        padding: 15px; 
+        margin-bottom: 12px; 
+        border-left: 6px solid #1E293B; 
+        border: 1px solid #CBD5E1;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    
+    /* Indicadores de Montos */
+    .monto-deuda { color: #E11D48; font-size: 1.2rem; font-weight: 800; text-align: right; }
+    .monto-ok { color: #10B981; font-size: 1.2rem; font-weight: 800; text-align: right; }
+    
+    /* Etiquetas de Jira */
+    .tag-jira { 
+        background: #E2E8F0; 
+        color: #475569; 
+        padding: 2px 8px; 
+        border-radius: 5px; 
+        font-size: 0.75rem; 
+        font-weight: bold;
+        border: 1px solid #94A3B8;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. CONEXIONES (GOOGLE & JIRA) ---
-@st.cache_resource(ttl=60)
-def conectar_gs():
-    try:
-        return gspread.authorize(Credentials.from_service_account_info(
-            st.secrets["gcp_service_account"], 
-            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        ))
-    except: return None
+# --- 2. FUNCIONES DE CONEXIÓN ---
 
-def obtener_datos_excel():
-    gc = conectar_gs()
+@st.cache_resource(ttl=60)
+def conectar_google_sheets():
+    try:
+        # Usamos la estructura de secretos que configuramos
+        info = st.secrets["gcp_service_account"]
+        creds = Credentials.from_service_account_info(
+            info, 
+            scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        )
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"Error de credenciales Google: {e}")
+        return None
+
+def cargar_datos():
+    gc = conectar_google_sheets()
     if not gc: return pd.DataFrame(), None
     try:
+        # Abrir el archivo y la pestaña específica
         sh = gc.open("Gestion_Magallan")
         ws = sh.worksheet("Saldos_Simples")
         df = pd.DataFrame(ws.get_all_records())
-        # Blindaje de columnas
-        cols = ['Fecha', 'Nro_Ppto', 'Cliente', 'Monto_Total', 'Anticipo', 'Vendedor', 'Facturado', 'Fecha_Confirmacion', 'Corporativa']
-        for c in cols:
-            if c not in df.columns: df[c] = ""
+        
+        # Procesamiento de datos numéricos
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
-        df['Fecha_Confirmacion'] = pd.to_datetime(df['Fecha_Confirmacion'], errors='coerce')
-        df['Es_Corp'] = df['Corporativa'].apply(lambda x: str(x).upper() == "SI")
-        df['Origen'] = df.apply(lambda r: "CORPORATIVO" if r['Es_Corp'] else r['Vendedor'], axis=1)
+        
+        # Etiqueta de origen para gráficos
+        df['Origen'] = df.apply(lambda r: "CORPORATIVO" if str(r['Corporativa']).upper() == "SI" else r['Vendedor'], axis=1)
+        
         return df, ws
-    except: return pd.DataFrame(), None
+    except Exception as e:
+        st.error(f"Error al leer la planilla: {e}")
+        return pd.DataFrame(), None
 
-def obtener_jira():
+def consultar_jira():
     try:
-        url = f"{st.secrets['jira']['url']}/rest/api/3/search"
-        auth = HTTPBasicAuth(st.secrets['jira']['user'], st.secrets['jira']['token'])
-        query = {'jql': f'project = "{st.secrets["jira"]["project_key"]}"', 'fields': 'summary,status'}
-        res = requests.get(url, headers={"Accept": "application/json"}, params=query, auth=auth)
+        conf = st.secrets["jira"]
+        auth = HTTPBasicAuth(conf["user"], conf["token"])
+        url = f"{conf['url']}/rest/api/3/search"
+        query = {'jql': f'project="{conf["project_key"]}"', 'fields': 'summary,status'}
+        
+        res = requests.get(url, params=query, auth=auth, timeout=5)
         if res.status_code == 200:
-            issues = res.json().get('issues', [])
-            # Diccionario: { '1234': 'In Progress' } (limpiamos el MAG- del summary si hace falta)
-            return {issue['fields']['summary'].replace("MAG-","").strip(): issue['fields']['status']['name'] for issue in issues}
-    except: return {}
+            # Crea un diccionario { "NumeroMAG": "EstadoJira" }
+            return {iss['fields']['summary'].replace("MAG-","").strip(): iss['fields']['status']['name'] for iss in res.json().get('issues', [])}
+    except:
+        return {}
     return {}
 
-# --- 3. LOGICA PRINCIPAL ---
-df, ws = obtener_datos_excel()
-dict_jira = obtener_jira()
+# --- 3. LÓGICA DE LA APP ---
+
+df, ws = cargar_datos()
+jira_status = consultar_jira()
 
 if not df.empty:
-    st.title("📊 Magallan ERP + Tablero Jira FAB")
-
-    # Métricas Superiores
+    st.title("🚀 Panel de Control Magallan")
+    
+    # --- MÉTRICAS SUPERIORES ---
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("VENTAS TOTALES", f"${df['Monto_Total'].sum():,.0f}")
-    m2.metric("COBRADO", f"${df['Anticipo'].sum():,.0f}")
-    m3.metric("PENDIENTE", f"${df['Saldo'].sum():,.0f}", delta_color="inverse")
-    m4.metric("TICKETS EN JIRA", f"{len(dict_jira)} Activos")
-
-    # --- SECCIÓN DE GRÁFICOS ---
-    st.subheader("📈 Análisis de Gestión y Taller")
-    g1, g2, g3 = st.columns(3)
-
-    with g1:
-        # Cobranza por Vendedor/Corp
-        rend = df.groupby('Origen').agg({'Anticipo':'sum', 'Saldo':'sum'}).reset_index()
-        st.plotly_chart(px.bar(rend, x='Origen', y=['Anticipo', 'Saldo'], title="Cobranza por Origen", barmode='group', color_discrete_map={'Anticipo':'#10B981', 'Saldo':'#E11D48'}), use_container_width=True)
-
-    with g2:
-        # Carga del Taller (Datos de Jira)
-        if dict_jira:
-            df_jira = pd.DataFrame(list(dict_jira.items()), columns=['ID', 'Estado'])
-            st.plotly_chart(px.pie(df_jira, names='Estado', title="Carga del Taller (Jira)", hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe), use_container_width=True)
-        else:
-            st.info("Sin datos de Jira")
-
-    with g3:
-        # Perfil Corporativo
-        fig_pie = px.pie(df, values='Monto_Total', names='Origen', title="Participación en Ventas")
-        st.plotly_chart(fig_pie, use_container_width=True)
+    total_vta = df['Monto_Total'].sum()
+    total_cob = df['Anticipo'].sum()
+    total_pen = df['Saldo'].sum()
+    
+    m1.metric("VENTAS TOTALES", f"${total_vta:,.0f}")
+    m2.metric("COBRADO", f"${total_cob:,.0f}", delta=f"{(total_cob/total_vta)*100:.1f}%", delta_color="normal")
+    m3.metric("PENDIENTE", f"${total_pen:,.0f}", delta=f"-${total_pen:,.0f}", delta_color="inverse")
+    m4.metric("PROYECTOS FAB", len(jira_status))
 
     st.divider()
 
-    # --- LISTADO CON INTEGRACIÓN JIRA ---
-    st.subheader("📋 Gestión de Saldos y Producción")
-    busc = st.text_input("🔍 Buscar cliente, Nro de presupuesto o estado...")
-    
-    # Ordenar y filtrar
-    df_list = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
-    
-    for i, r in df_list.sort_values(by='Fecha', ascending=False).iterrows():
-        # Cruzar con Jira
-        estado_taller = dict_jira.get(str(r['Nro_Ppto']).strip(), "No en Tablero")
-        estilo = "card-corp" if r['Es_Corp'] else "card-vendedor"
+    # --- CUERPO PRINCIPAL ---
+    col_form, col_lista = st.columns([1, 2.5])
+
+    # FORMULARIO DE INGRESO (Izquierda)
+    with col_form:
+        st.subheader("📝 Nuevo Registro")
+        with st.form("registro_venta", clear_on_submit=True):
+            f_nro = st.text_input("Número MAG#")
+            f_cli = st.text_input("Cliente")
+            f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto", "Otro"])
+            f_corp = st.checkbox("¿Es Cuenta Corporativa?")
+            f_tot = st.number_input("Monto Total ($)", min_value=0.0, step=1000.0)
+            f_ant = st.number_input("Anticipo / Cobrado ($)", min_value=0.0, step=1000.0)
+            f_fec = st.date_input("Fecha de Venta", datetime.now())
+            
+            if st.form_submit_button("REGISTRAR VENTA"):
+                nueva_fila = [
+                    f_fec.strftime("%Y-%m-%d"), 
+                    f_nro, 
+                    f_cli, 
+                    f_tot, 
+                    f_ant, 
+                    f_ven, 
+                    "No", # Facturado
+                    datetime.now().strftime("%Y-%m-%d"), # Fecha Conf
+                    "SI" if f_corp else "NO"
+                ]
+                ws.append_row(nueva_fila)
+                st.success("¡Venta guardada!")
+                st.rerun()
+
+    # LISTADO Y GESTIÓN (Derecha)
+    with col_lista:
+        st.subheader("📑 Gestión de Cartera y Producción")
+        busqueda = st.text_input("🔍 Buscar por cliente o número de pedido...")
         
-        st.markdown(f"""
-            <div class="{estilo}">
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div>
-                        <span style="font-size:0.8rem; color:#64748B;">Ppto: {r['Fecha'].strftime('%d/%m/%y') if not pd.isnull(r['Fecha']) else 'S/F'}</span><br>
-                        <b style="font-size:1.1rem;">MAG-{r['Nro_Ppto']} | {r['Cliente']}</b>
-                        <span class="tag tag-jira">⚙️ {estado_taller}</span><br>
-                        <span class="tag {'tag-corp' if r['Es_Corp'] else 'tag-vend'}">{"CORPORATIVO" if r['Es_Corp'] else r['Vendedor']}</span>
-                        <span class="tag tag-fact">{r['Facturado']}</span>
-                    </div>
-                    <div class="{'monto-ok' if r['Saldo']<=0 else 'monto-deuda'}">
-                        {'$' + str(f"{r['Saldo']:,.0f}") if r['Saldo']>0 else 'SALDADO'}
+        # Filtrado
+        df_ver = df[df.apply(lambda r: busqueda.lower() in str(r.values).lower(), axis=1)] if busqueda else df
+        
+        for i, fila in df_ver.sort_values(by='Fecha', ascending=False).iterrows():
+            # Obtener estado de Jira
+            ticket = str(fila['Nro_Ppto']).strip()
+            estado_taller = jira_status.get(ticket, "No iniciado")
+            
+            # Determinar estilo
+            es_corp = str(fila['Corporativa']).upper() == "SI"
+            estilo_card = "card-corp" if es_corp else "card-vendedor"
+            clase_monto = "monto-ok" if fila['Saldo'] <= 0 else "monto-deuda"
+            texto_saldo = "PAGADO" if fila['Saldo'] <= 0 else f"${fila['Saldo']:,.0f}"
+            
+            # Renderizado de Tarjeta
+            st.markdown(f"""
+                <div class="{estilo_card}">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div style="flex: 2;">
+                            <span style="font-size: 1.1rem; font-weight: bold;">MAG-{fila['Nro_Ppto']} | {fila['Cliente']}</span>
+                            <span class="tag-jira">🛠 {estado_taller}</span><br>
+                            <small>👤 {fila['Vendedor']} | 📅 {fila['Fecha'].strftime('%d/%m/%Y') if not pd.isnull(fila['Fecha']) else 'S/F'}</small>
+                        </div>
+                        <div style="flex: 1; text-align: right;">
+                            <div style="font-size: 0.8rem; color: #64748b;">PENDIENTE</div>
+                            <div class="{clase_monto}">{texto_saldo}</div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+            
+            # Botón de edición rápida
+            with st.expander(f"Editar saldos de {fila['Cliente']}"):
+                c1, c2, c3 = st.columns(3)
+                nuevo_tot = c1.number_input("Monto Total", value=float(fila['Monto_Total']), key=f"tot_{i}")
+                nuevo_ant = c2.number_input("Anticipo", value=float(fila['Anticipo']), key=f"ant_{i}")
+                if c3.button("Actualizar", key=f"btn_{i}"):
+                    # En gspread, las filas son index+2 (cabecera + base 0)
+                    ws.update_cell(i+2, 4, nuevo_tot)
+                    ws.update_cell(i+2, 5, nuevo_ant)
+                    st.success("Actualizado")
+                    st.rerun()
+
+    st.divider()
+
+    # --- 4. GRÁFICOS DE RENDIMIENTO ---
+    st.subheader("📊 Análisis de Rendimiento")
+    g1, g2 = st.columns(2)
+    
+    with g1:
+        # Ventas por Vendedor/Corp
+        fig_ven = px.bar(df.groupby('Origen')['Monto_Total'].sum().reset_index(), 
+                         x='Origen', y='Monto_Total', title="Ventas Totales por Origen",
+                         color='Origen', color_discrete_sequence=px.colors.qualitative.Pastel)
+        st.plotly_chart(fig_ven, use_container_width=True)
         
-        with st.expander("Actualizar montos"):
-            col_u1, col_u2 = st.columns(2)
-            ut = col_u1.number_input("Total", value=float(r['Monto_Total']), key=f"t{i}")
-            ua = col_u2.number_input("Anticipo", value=float(r['Anticipo']), key=f"a{i}")
-            if st.button("Guardar Cambios", key=f"b{i}"):
-                ws.update_cell(i+2, 4, ut)
-                ws.update_cell(i+2, 5, ua)
-                st.rerun()
+    with g2:
+        # Estado de Cobranza General
+        cobranza = pd.DataFrame({
+            'Estado': ['Cobrado', 'Pendiente'],
+            'Monto': [total_cob, total_pen]
+        })
+        fig_pie = px.pie(cobranza, values='Monto', names='Estado', title="Salud Financiera (Total)",
+                         color_discrete_sequence=['#10B981', '#E11D48'], hole=0.5)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+else:
+    st.info("Esperando conexión con Google Sheets. Asegúrate de que el archivo 'Gestion_Magallan' exista y esté compartido.")
