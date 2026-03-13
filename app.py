@@ -1,4 +1,34 @@
-import streamlit as st
+[14:50, 13/3/2026] Jonathan: import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+import plotly.express as px
+from datetime import datetime
+
+# --- 1. CONFIGURACIÓN VISUAL ---
+st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
+
+st.markdown("""
+    <style>
+    .stMetric { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
+    .card-vendedor { background: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #3b82f6; box-shadow: 0 2px 5px rgba(0,0,0,0.08); }
+    .card-corp { background: #f8fafc; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #1e293b; border: 1…
+[14:53, 13/3/2026] Jonathan: import streamlit as st
+import pandas as pd
+import gspread
+from google.oauth2.service_account import Credentials
+import plotly.express as px
+from datetime import datetime
+
+# --- 1. CONFIGURACIÓN VISUAL ---
+st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
+
+st.markdown("""
+    <style>
+    .stMetric { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
+    .card-vendedor { background: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #3b82f6; box-shadow: 0 2px 5px rgba(0,0,0,0.08); }
+    .card-corp { background: #f8fafc; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #1e293b; border: 1…
+[14:57, 13/3/2026] Jonathan: import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
