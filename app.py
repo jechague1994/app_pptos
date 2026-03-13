@@ -3,11 +3,11 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import plotly.express as px
-from datetime import datetime, timedelta
+from datetime import datetime
 import requests
 from requests.auth import HTTPBasicAuth
 
-# --- 1. CONFIGURACIÓN ---
+# --- 1. CONFIGURACIÓN Y ESTILOS ---
 st.set_page_config(page_title="Magallan Sistema Integrado", layout="wide", page_icon="🚀")
 
 st.markdown("""
@@ -49,14 +49,14 @@ def cargar_datos():
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         
-        # Lógica de Saldos Jóvenes y Viejos
+        # Lógica de Saldos Jóvenes y Viejos (30 días)
         hoy = datetime.now()
         df['Antiguedad'] = (hoy - df['Fecha']).dt.days
         df['Estado_Deuda'] = df.apply(
             lambda r: 'Viejo' if r['Antiguedad'] > 30 and r['Saldo'] > 0 else ('Joven' if r['Saldo'] > 0 else 'Pagado'), 
             axis=1
         )
-        # Para gráfico mensual
+        # Preparación para gráfico mensual
         df['Mes_Año'] = df['Fecha'].dt.strftime('%Y-%m')
         
         return df, ws
@@ -69,20 +69,19 @@ def consultar_jira():
         conf = st.secrets["jira"]
         url = f"{conf['url']}/rest/api/3/search"
         auth = HTTPBasicAuth(conf["user"], conf["token"])
+        # Traemos tickets del proyecto FAB
         query = {'jql': f'project="{conf["project_key"]}"', 'fields': 'summary,status'}
         res = requests.get(url, params=query, auth=auth, timeout=7)
         if res.status_code == 200:
             issues = res.json().get('issues', [])
-            mapping = {}
-            for iss in issues:
-                summary = str(iss['fields']['summary']).upper().replace("MAG-", "").strip()
-                mapping[summary] = iss['fields']['status']['name']
+            # MAPEADO DIRECTO: Buscamos el número tal cual aparece en el título de Jira
+            mapping = {str(iss['fields']['summary']).strip(): iss['fields']['status']['name'] for iss in issues}
             return mapping
     except:
         return {}
     return {}
 
-# --- 3. LÓGICA DE INTERFAZ ---
+# --- 3. DASHBOARD ---
 
 df, ws = cargar_datos()
 dict_jira = consultar_jira()
@@ -99,10 +98,10 @@ if not df.empty:
     t1.metric("VENTAS TOTALES", f"${total_vta:,.0f}")
     t2.metric("COBRADO TOTAL", f"${total_cob:,.0f}", f"{(total_cob/total_vta)*100:.1f}%")
     t3.metric("PENDIENTE COBRO", f"${total_pen:,.0f}", delta_color="inverse")
-    t4.metric("PEDIDOS EN TALLER", len(dict_jira))
+    t4.metric("TICKETS EN JIRA", len(dict_jira))
 
-    # --- ANÁLISIS DE ENVEJECIMIENTO ---
-    st.markdown("### ⏳ Envejecimiento de Deuda")
+    # --- ENVEJECIMIENTO DE DEUDA ---
+    st.markdown("### ⏳ Análisis de Deuda")
     c_jov, c_vie, c_pag = st.columns(3)
     val_joven = df[df['Estado_Deuda'] == 'Joven']['Saldo'].sum()
     val_viejo = df[df['Estado_Deuda'] == 'Viejo']['Saldo'].sum()
@@ -119,7 +118,7 @@ if not df.empty:
     with col_reg:
         st.subheader("📝 Nuevo Registro")
         with st.form("form_alta", clear_on_submit=True):
-            f_nro = st.text_input("MAG# / Pedido")
+            f_nro = st.text_input("Nro de Ppto (Igual que en Jira)")
             f_cli = st.text_input("Cliente")
             f_ven = st.selectbox("Vendedor", ["Jonathan", "Jacqueline", "Roberto", "Distribuidor"])
             f_corp = st.checkbox("¿Es Cuenta Corporativa?")
@@ -133,13 +132,15 @@ if not df.empty:
                 st.rerun()
 
     with col_list:
-        st.subheader("📑 Cartera de Clientes")
-        busc = st.text_input("🔍 Buscar por cliente o número...")
+        st.subheader("📑 Cartera y Taller")
+        busc = st.text_input("🔍 Buscar cliente o presupuesto...")
         df_f = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
         
         for i, fila in df_f.sort_values(by='Fecha', ascending=False).iterrows():
-            nro_limpio = str(fila['Nro_Ppto']).strip()
-            est_jira = dict_jira.get(nro_limpio, dict_jira.get(f"MAG-{nro_limpio}", "Sin Ticket"))
+            # BÚSQUEDA DIRECTA EN JIRA POR NRO DE PPTO
+            nro_ppto = str(fila['Nro_Ppto']).strip()
+            est_jira = dict_jira.get(nro_ppto, "Sin Ticket")
+            
             es_corp = str(fila['Corporativa']).upper() == "SI"
             clase_monto = "monto-ok" if fila['Saldo'] <= 0 else "monto-alerta"
             icon_deuda = "🔴" if fila['Estado_Deuda'] == 'Viejo' else "🔵"
@@ -150,7 +151,7 @@ if not df.empty:
                         <div style="flex:2;">
                             <span style="font-size:1.1rem; font-weight:bold;">{fila['Cliente']}</span> 
                             <span class="status-badge">🛠 {est_jira}</span><br>
-                            <small>{icon_deuda} MAG-{nro_limpio} | {fila['Vendedor']} | {fila['Fecha'].strftime('%d/%m/%Y')}</small>
+                            <small>{icon_deuda} Ppto: {nro_ppto} | {fila['Vendedor']} | {fila['Fecha'].strftime('%d/%m/%Y')}</small>
                         </div>
                         <div style="text-align:right;">
                             <small>PENDIENTE</small><br>
@@ -162,29 +163,3 @@ if not df.empty:
             
             with st.expander("Actualizar Cobro"):
                 nuevo_ant = st.number_input("Total cobrado", value=float(fila['Anticipo']), key=f"inp_{i}")
-                if st.button("Guardar Pago", key=f"btn_{i}"):
-                    ws.update_cell(i+2, 5, nuevo_ant)
-                    st.rerun()
-
-    # --- 4. SECCIÓN DE ESTADÍSTICAS ---
-    st.divider()
-    st.subheader("📊 Análisis de Crecimiento y Rendimiento")
-    
-    # Gráfico de Ventas Mensuales (Agregado solicitado)
-    df_mensual = df.groupby('Mes_Año')['Monto_Total'].sum().reset_index()
-    fig_mes = px.line(df_mensual, x='Mes_Año', y='Monto_Total', title="Evolución de Ventas Mensuales", 
-                      markers=True, line_shape="spline", color_discrete_sequence=['#3b82f6'])
-    st.plotly_chart(fig_mes, use_container_width=True)
-
-    g1, g2 = st.columns(2)
-    with g1:
-        fig1 = px.pie(df[df['Saldo']>0], values='Saldo', names='Estado_Deuda', 
-                     title="Composición de la Deuda", color_discrete_map={'Viejo':'#e11d48', 'Joven':'#3b82f6'})
-        st.plotly_chart(fig1, use_container_width=True)
-    with g2:
-        fig2 = px.bar(df.groupby('Vendedor')['Monto_Total'].sum().reset_index(), 
-                     x='Vendedor', y='Monto_Total', title="Ventas Totales por Vendedor")
-        st.plotly_chart(fig2, use_container_width=True)
-
-else:
-    st.warning("Sin datos en la hoja 'Saldos_Simples'.")
