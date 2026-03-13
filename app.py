@@ -43,8 +43,6 @@ def cargar_datos():
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
-        
-        # Limpieza clave: Convertimos Nro_Ppto a string limpio para comparar
         df['Nro_Ppto_Limpiado'] = df['Nro_Ppto'].astype(str).str.strip()
         
         hoy = datetime.now()
@@ -57,45 +55,59 @@ def cargar_datos():
 def consultar_jira():
     try:
         conf = st.secrets["jira"]
-        url = f"{conf['url'].strip().rstrip('/')}/rest/api/2/search"
+        base_url = conf['url'].strip().rstrip('/')
+        # Usamos API v2 que es más estable para búsquedas simples
+        api_url = f"{base_url}/rest/api/2/search"
         auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
-        query = {'jql': f'project="{conf["project_key"]}"', 'fields': 'summary,status', 'maxResults': 100}
-        res = requests.get(url, params=query, auth=auth, timeout=10)
+        
+        # JQL simplificado sin comillas extra
+        project = conf["project_key"].strip()
+        params = {
+            'jql': f'project={project}',
+            'fields': 'summary,status',
+            'maxResults': 100
+        }
+        
+        res = requests.get(api_url, params=params, auth=auth, timeout=10)
         if res.status_code == 200:
             issues = res.json().get('issues', [])
-            # Limpiamos el título de Jira para que el cruce sea exacto
+            # Mapeo: Título limpio -> Nombre del Estado
             return {str(iss['fields']['summary']).strip(): iss['fields']['status']['name'] for iss in issues}
+        else:
+            return {}
     except:
-        pass
-    return {}
+        return {}
 
-# --- 3. BARRA LATERAL (DIAGNÓSTICO) ---
+# --- 3. BARRA LATERAL (TEST REPARADO) ---
 with st.sidebar:
-    st.header("🛠 Diagnóstico Jira")
+    st.header("🛠 Diagnóstico")
     if st.button("Ejecutar Test"):
         conf = st.secrets["jira"]
         base = conf['url'].strip().rstrip('/')
-        try:
-            auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
-            res = requests.get(f"{base}/rest/api/2/myself", auth=auth)
-            if res.status_code == 200:
-                st.success("✅ Conexión OK")
-                search_url = f"{base}/rest/api/2/search"
-                q = {'jql': f'project="{conf["project_key"]}"', 'maxResults': 5}
-                res_q = requests.get(search_url, params=q, auth=auth)
-                if res_q.status_code == 200:
-                    tickets = res_q.json().get('issues', [])
-                    st.info(f"Tickets encontrados: {len(tickets)}")
-                    for t in tickets:
-                        st.write(f"- {t['fields']['summary']}")
-                else:
-                    st.error(f"Error búsqueda: {res_q.status_code}")
+        auth = HTTPBasicAuth(conf["user"], conf["token"].strip())
+        
+        # Test 1: Conexión básica
+        res = requests.get(f"{base}/rest/api/2/myself", auth=auth)
+        if res.status_code == 200:
+            st.success("✅ Credenciales OK")
+            # Test 2: Búsqueda sin JQL complejo (solo el proyecto)
+            search_url = f"{base}/rest/api/2/search"
+            p = {'jql': f'project={conf["project_key"].strip()}', 'maxResults': 3}
+            res_q = requests.get(search_url, params=p, auth=auth)
+            
+            if res_q.status_code == 200:
+                st.success("✅ Búsqueda OK")
+                tickets = res_q.json().get('issues', [])
+                st.info(f"Tickets detectados: {len(tickets)}")
+                for t in tickets:
+                    st.write(f"- {t['fields']['summary']}")
             else:
-                st.error(f"Error {res.status_code}")
-        except Exception as e:
-            st.error(f"Error: {e}")
+                st.error(f"❌ Error en búsqueda: {res_q.status_code}")
+                st.code(res_q.text) # Muestra el error exacto de Jira
+        else:
+            st.error(f"❌ Error conexión: {res.status_code}")
 
-# --- 4. DASHBOARD ---
+# --- 4. LÓGICA PRINCIPAL ---
 df, ws = cargar_datos()
 dict_jira = consultar_jira()
 
@@ -114,7 +126,7 @@ if not df.empty:
     col_izq, col_der = st.columns([1.5, 2])
 
     with col_izq:
-        st.subheader("📝 Nuevo Pedido")
+        st.subheader("📝 Nuevo Registro")
         with st.form("alta"):
             nro = st.text_input("Nro Ppto (Igual a Jira)")
             cli = st.text_input("Cliente")
@@ -128,20 +140,18 @@ if not df.empty:
             
             if st.form_submit_button("GUARDAR"):
                 ws.append_row([f_ppto.strftime("%Y-%m-%d"), nro, cli, tot, ant, ven, fac, f_vta.strftime("%Y-%m-%d"), "SI" if corp else "NO"])
-                st.success("Cargado!"); st.rerun()
+                st.success("¡Guardado!"); st.rerun()
 
     with col_der:
-        st.subheader("📑 Cartera de Clientes")
-        busc = st.text_input("🔍 Buscar...")
+        st.subheader("📑 Cartera de Pedidos")
+        busc = st.text_input("🔍 Filtrar por nombre o ppto...")
         df_v = df[df.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df
         
         for i, r in df_v.sort_values(by='Fecha', ascending=False).iterrows():
-            # Buscamos usando el Nro_Ppto limpiado
             nro_limpio = str(r['Nro_Ppto_Limpiado'])
             est_j = dict_jira.get(nro_limpio, "Sin Ticket")
             
-            es_corp = str(r.get('Corporativa','')).upper() == "SI"
-            clase = "card-corp" if es_corp else "card-vendedor"
+            clase = "card-corp" if str(r.get('Corporativa','')).upper() == "SI" else "card-vendedor"
             
             st.markdown(f"""
                 <div class="{clase}">
@@ -159,14 +169,14 @@ if not df.empty:
             """, unsafe_allow_html=True)
             
             with st.expander("Actualizar"):
-                nuevo = st.number_input("Cobrado", value=float(r['Anticipo']), key=f"u{i}")
-                if st.button("OK", key=f"b{i}"):
+                nuevo = st.number_input("Monto cobrado", value=float(r['Anticipo']), key=f"u{i}")
+                if st.button("Confirmar", key=f"b{i}"):
                     ws.update_cell(i+2, 5, nuevo); st.rerun()
 
     # Gráfico mensual
     df_graf = df.dropna(subset=['Fecha']).copy()
     df_graf['Mes'] = df_graf['Fecha'].dt.strftime('%Y-%m')
-    fig = px.line(df_graf.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Ventas por Mes", markers=True)
+    fig = px.line(df_graf.groupby('Mes')['Monto_Total'].sum().reset_index(), x='Mes', y='Monto_Total', title="Evolución de Ventas", markers=True)
     st.plotly_chart(fig, use_container_width=True)
 else:
-    st.info("No hay datos cargados.")
+    st.info("No hay datos para mostrar.")
