@@ -139,4 +139,4 @@ with tab_jira:
     # Asegúrate de que en Secrets sea la URL del TABLERO (ej: https://magallan.atlassian.net/jira/software/projects/PROJ/boards/1)
     jira_url = st.secrets["jira"]["url"]
     
-    st.markdown(f'<iframe src="{jira_url}" width="100%" height="800" style="border:none;"></iframe>', unsafe_allow_html=True
+    st.markdown(f'<iframe src="{jira_url}" width="100%" height="800" style="border:none;"></iframe>', unsafe_allow_html=True)
