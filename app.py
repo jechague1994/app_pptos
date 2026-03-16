@@ -9,7 +9,7 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Rendimiento de Montos y Saldos", layout="wide", page_icon="📊")
 
-META_VENTAS = 250000000 
+META_VENTAS = 150000000 
 COLORES_VENDEDORES = {"Jacqueline": "#FFB6C1", "Jonathan": "#ADD8E6", "Roberto": "#98FB98", "Corporativo": "#CBD5E1"}
 
 st.markdown("""
@@ -72,7 +72,7 @@ if df is not None and not df.empty:
 
     st.title("📈 Rendimiento de Montos y Saldos")
 
-    # VELOCÍMETRO (Con Colores Recuperados)
+    # VELOCÍMETRO (Meta Global 150M con colores)
     fig_meta = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = ventas_globales,
@@ -82,15 +82,10 @@ if df is not None and not df.empty:
             'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'},
             'bar': {'color': "#3b82f6"},
             'steps': [
-                {'range': [0, META_VENTAS*0.5], 'color': "#fee2e2"},    # Rojo suave
-                {'range': [META_VENTAS*0.5, META_VENTAS*0.8], 'color': "#fef9c3"}, # Amarillo
-                {'range': [META_VENTAS*0.8, META_VENTAS], 'color': "#dcfce7"}  # Verde
-            ],
-            'threshold': {
-                'line': {'color': "red", 'width': 4},
-                'thickness': 0.75,
-                'value': META_VENTAS
-            }
+                {'range': [0, META_VENTAS*0.5], 'color': "#fee2e2"},
+                {'range': [META_VENTAS*0.5, META_VENTAS*0.8], 'color': "#fef9c3"},
+                {'range': [META_VENTAS*0.8, META_VENTAS], 'color': "#dcfce7"}
+            ]
         }
     ))
     fig_meta.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
@@ -122,10 +117,11 @@ if df is not None and not df.empty:
         with c_filt2:
             ver_completados = st.toggle("Ver historial de Completados", value=False)
 
-        df_view = df.copy() if ver_completados else df[df['Estado_Normalizado'] == 'Pending' or df['Estado_Normalizado'] == 'Pendiente'].copy()
-        # Ajuste para el filtro de vista
-        if not ver_completados:
-            df_view = df[df['Estado_Normalizado'] == 'Pendiente'].copy()
+        # CORRECCIÓN DE LA LÓGICA DE FILTRADO (Uso de .isin para evitar el ValueError)
+        if ver_completados:
+            df_view = df.copy()
+        else:
+            df_view = df[df['Estado_Normalizado'].isin(['Pendiente', 'Pending'])].copy()
 
         if busc:
             df_view = df_view[df_view.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)]
@@ -157,7 +153,6 @@ if df is not None and not df.empty:
                     np = st.number_input("Cobrado:", value=float(r['Anticipo']), key=f"p_{i}")
                     if st.button("💾 Guardar", key=f"s_{i}"):
                         ws.update_cell(i+2, 4, nt); ws.update_cell(i+2, 5, np); st.rerun()
-                    
                     nuevo_st = "Completado" if r['Estado_Normalizado'] == "Pendiente" else "Pendiente"
                     if st.button(f"Pasar a {nuevo_st}", key=f"st_{i}"):
                         ws.update_cell(i+2, 10, nuevo_st); st.rerun()
@@ -180,13 +175,9 @@ if df is not None and not df.empty:
     st.subheader("📊 Rendimiento Individual del Equipo")
     g1, g2 = st.columns(2)
     with g1: 
-        st.plotly_chart(px.pie(df_v_total, values='Monto_Total', names='Vendedor', 
-                               title="Participación en Ventas (Equipo)", hole=0.4, 
-                               color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+        st.plotly_chart(px.pie(df_v_total, values='Monto_Total', names='Vendedor', title="Ventas Equipo", hole=0.4, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
     with g2: 
-        st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), 
-                               x='Vendedor', y='Anticipo', title="Ranking de Cobranza (Equipo)", 
-                               color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+        st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), x='Vendedor', y='Anticipo', title="Cobranza Equipo", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
 else:
     st.error("No hay datos cargados.")
