@@ -40,17 +40,13 @@ def cargar_datos():
         sh = gc.open("Gestion_Magallan")
         ws = sh.worksheet("Saldos_Simples")
         df = pd.DataFrame(ws.get_all_records())
-        
-        # Si la columna Estado no existe en el Excel, la creamos en el DataFrame
         if 'Estado' not in df.columns: df['Estado'] = 'Pendiente'
-        
-        # Limpieza de datos
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         df['Fecha_Creacion'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce')
         df['Días_Fabricación'] = (datetime.now() - df['Fecha_Creacion']).dt.days.fillna(0).astype(int)
-        
+        df['Es_Corp'] = df['Corporativa'].astype(str).str.upper() == "SI"
         return df, ws
     except Exception as e:
         st.error(f"Error cargando Excel: {e}")
@@ -64,37 +60,50 @@ df, ws = cargar_datos()
 if df is not None and not df.empty:
     st.sidebar.header("🔍 Filtros")
     ver_completados = st.sidebar.checkbox("Ver trabajos COMPLETADOS")
-    v_sel = st.sidebar.selectbox("Vendedor", ["Todos"] + sorted(list(df['Vendedor'].unique())))
+    v_sel = st.sidebar.selectbox("Vendedor", ["Todos"] + sorted(list(df[df['Es_Corp']==False]['Vendedor'].unique())))
     
-    # Filtrar por estado: Si el campo está vacío, lo tratamos como 'Pendiente'
     df['Estado_Limpio'] = df['Estado'].apply(lambda x: 'Completado' if str(x).strip() == 'Completado' else 'Pendiente')
-    
     estado_filtro = 'Completado' if ver_completados else 'Pendiente'
-    df_f = df[df['Estado_Limpio'] == estado_filtro].copy()
     
-    if v_sel != "Todos":
-        df_f = df_f[df_f['Vendedor'] == v_sel]
-
+    # Base filtrada por estado
+    df_base = df[df['Estado_Limpio'] == estado_filtro].copy()
+    
     st.title("📊 Magallan Intelligence Pro")
 
-    # MÉTRICAS
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("VENTAS TOTALES", fmt(df_f['Monto_Total'].sum()))
-    m2.metric("RECAUDADO", fmt(df_f['Anticipo'].sum()))
-    m3.metric("DEUDA PENDIENTE", fmt(df_f['Saldo'].sum()), delta_color="inverse")
-    m4.metric("PEDIDOS", len(df_f))
+    # MÉTRICAS SEPARADAS
+    df_solo_vendedores = df_base[df_base['Es_Corp'] == False]
+    df_solo_corp = df_base[df_base['Es_Corp'] == True]
+
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("VENTAS VENDEDORES", fmt(df_solo_vendedores['Monto_Total'].sum()))
+        st.caption(f"Deuda: {fmt(df_solo_vendedores['Saldo'].sum())}")
+    with m2:
+        st.metric("VENTAS CORPORATIVAS", fmt(df_solo_corp['Monto_Total'].sum()))
+        st.caption(f"Deuda: {fmt(df_solo_corp['Saldo'].sum())}")
+    with m3:
+        total_gral = df_base['Monto_Total'].sum()
+        st.metric("TOTAL GENERAL", fmt(total_gral))
+        st.caption(f"Pendiente Cobro: {fmt(df_base['Saldo'].sum())}")
 
     st.divider()
 
-    # GRÁFICOS
+    # GRÁFICOS (Solo Vendedores para no mezclar)
+    st.subheader("📈 Rendimiento de Equipo (Sin Corp.)")
     g1, g2, g3 = st.columns(3)
+    
+    # Aplicar filtro de vendedor solo a los gráficos de equipo
+    df_graficos = df_solo_vendedores.copy()
+    if v_sel != "Todos":
+        df_graficos = df_graficos[df_graficos['Vendedor'] == v_sel]
+
     with g1:
-        st.plotly_chart(px.pie(df_f, values='Monto_Total', names='Vendedor', title="Cuota Ventas", hole=0.5, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+        st.plotly_chart(px.pie(df_graficos, values='Monto_Total', names='Vendedor', title="Cuota Ventas", hole=0.5, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
     with g2:
-        st.plotly_chart(px.pie(df_f, values='Monto_Total', names='Facturado', title="Facturación", color='Facturado', color_discrete_map={"Facturado": "#A7F3D0", "No Facturado": "#FCA5A5"}), use_container_width=True)
+        st.plotly_chart(px.pie(df_graficos, values='Monto_Total', names='Facturado', title="Facturación Vendedores", color='Facturado', color_discrete_map={"Facturado": "#A7F3D0", "No Facturado": "#FCA5A5"}), use_container_width=True)
     with g3:
-        df_rank = df_f.groupby('Vendedor')['Anticipo'].sum().reset_index()
-        st.plotly_chart(px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', title="Ranking Cobranza", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+        df_rank = df_graficos.groupby('Vendedor')['Anticipo'].sum().reset_index()
+        st.plotly_chart(px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', title="Ranking Cobranza Equipo", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
     st.divider()
 
@@ -104,19 +113,24 @@ if df is not None and not df.empty:
     with col_l:
         st.subheader("📑 Gestión de Cartera")
         busc = st.text_input("🔍 Buscar cliente...")
-        df_v = df_f[df_f.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_f
+        
+        # Filtro final para la lista (Vendedor + Búsqueda)
+        df_lista = df_base.copy()
+        if v_sel != "Todos":
+            df_lista = df_lista[(df_lista['Vendedor'] == v_sel) | (df_lista['Es_Corp'] == True)]
+        
+        df_v = df_lista[df_lista.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_lista
         
         for i, r in df_v.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
-            es_corp = str(r.get('Corporativa','')).upper() == "SI"
             dias_f = int(r['Días_Fabricación'])
-            clase = "card-corp" if es_corp else ("card-demora" if dias_f > 15 else "card-vendedor")
-            monto_clase = "monto-corp" if es_corp else "monto-alerta"
+            clase = "card-corp" if r['Es_Corp'] else ("card-demora" if dias_f > 15 else "card-vendedor")
+            monto_clase = "monto-corp" if r['Es_Corp'] else "monto-alerta"
 
             st.markdown(f"""
                 <div class="{clase}">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div style="flex:2;">
-                            <b>{r['Cliente']}</b> {'✅' if r['Estado_Limpio'] == 'Completado' else ''}<br>
+                            <b>{r['Cliente']}</b> {' [CORP]' if r['Es_Corp'] else ''} {'✅' if r['Estado_Limpio'] == 'Completado' else ''}<br>
                             <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']}</small><br>
                             <small>{'⚠️ DEMORA: ' + str(dias_f) + ' DÍAS' if dias_f > 15 else 'Hace ' + str(dias_f) + ' días'}</small>
                         </div>
@@ -129,21 +143,19 @@ if df is not None and not df.empty:
             """, unsafe_allow_html=True)
             
             with st.expander(f"Editar {r['Cliente']}"):
-                # Columnas fijas de edición (basado en el orden estándar del Excel)
                 n_total = st.number_input("Monto Total:", value=float(r['Monto_Total']), key=f"t_{i}")
                 n_pago = st.number_input("Anticipo/Pago:", value=float(r['Anticipo']), key=f"p_{i}")
-                
                 c1, c2 = st.columns(2)
                 with c1:
-                    if st.button("💾 Guardar Cambios", key=f"s_{i}"):
-                        ws.update_cell(i+2, 4, n_total) # Columna D
-                        ws.update_cell(i+2, 5, n_pago)  # Columna E
+                    if st.button("💾 Guardar", key=f"s_{i}"):
+                        ws.update_cell(i+2, 4, n_total) 
+                        ws.update_cell(i+2, 5, n_pago)
                         st.rerun()
                 with c2:
                     label = "⏪ Reabrir" if r['Estado_Limpio'] == 'Completado' else "🏁 Completar"
                     nuevo_st = "Pendiente" if r['Estado_Limpio'] == 'Completado' else "Completado"
                     if st.button(label, key=f"st_{i}"):
-                        ws.update_cell(i+2, 10, nuevo_st) # Columna J
+                        ws.update_cell(i+2, 10, nuevo_st) 
                         st.rerun()
 
     with col_r:
@@ -152,12 +164,12 @@ if df is not None and not df.empty:
             f_crea = st.date_input("Fecha", datetime.now())
             f_ppto = st.text_input("Nro Ppto")
             f_cli = st.text_input("Cliente")
-            f_ven = st.selectbox("Vendedor", ["Jacqueline", "Jonathan", "Roberto"])
-            f_tot = st.number_input("Total $", min_value=0.0)
+            f_ven = st.selectbox("Vendedor Asignado", ["Jacqueline", "Jonathan", "Roberto", "Corporativo"])
+            f_tot = st.number_input("Monto Total $", min_value=0.0)
             f_ant = st.number_input("Anticipo $", min_value=0.0)
-            f_corp = st.checkbox("Corporativa")
+            f_corp = st.checkbox("¿Es Cuenta Corporativa?")
             if st.form_submit_button("REGISTRAR"):
                 ws.append_row([f_crea.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, "No Facturado", datetime.now().strftime("%Y-%m-%d"), "SI" if f_corp else "NO", "Pendiente"])
                 st.balloons(); st.rerun()
 else:
-    st.warning("No se detectan datos. Verifica que el Excel tenga los encabezados en la fila 1.")
+    st.warning("No se detectan datos.")
