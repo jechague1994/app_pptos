@@ -66,22 +66,32 @@ def fmt(n): return f"$ {n:,.0f}".replace(",", ".")
 df, ws = cargar_datos()
 
 if df is not None and not df.empty:
-    # Segmentación
     df_v_total = df[df['Es_Corp'] == False]
     df_c_total = df[df['Es_Corp'] == True]
-    
-    # Valores para métricas y velocímetro (Suma todo)
     ventas_globales = df['Monto_Total'].sum() 
 
     st.title("📈 Rendimiento de Montos y Saldos")
 
-    # VELOCÍMETRO (Meta Global 150M)
+    # VELOCÍMETRO (Con Colores Recuperados)
     fig_meta = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = ventas_globales,
         title = {'text': "Meta Global (Equipo + Corp)", 'font': {'size': 18}},
         delta = {'reference': META_VENTAS, 'increasing': {'color': "green"}},
-        gauge = {'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'}, 'bar': {'color': "#3b82f6"}}
+        gauge = {
+            'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'},
+            'bar': {'color': "#3b82f6"},
+            'steps': [
+                {'range': [0, META_VENTAS*0.5], 'color': "#fee2e2"},    # Rojo suave
+                {'range': [META_VENTAS*0.5, META_VENTAS*0.8], 'color': "#fef9c3"}, # Amarillo
+                {'range': [META_VENTAS*0.8, META_VENTAS], 'color': "#dcfce7"}  # Verde
+            ],
+            'threshold': {
+                'line': {'color': "red", 'width': 4},
+                'thickness': 0.75,
+                'value': META_VENTAS
+            }
+        }
     ))
     fig_meta.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
     st.plotly_chart(fig_meta, use_container_width=True)
@@ -112,7 +122,11 @@ if df is not None and not df.empty:
         with c_filt2:
             ver_completados = st.toggle("Ver historial de Completados", value=False)
 
-        df_view = df.copy() if ver_completados else df[df['Estado_Normalizado'] == 'Pendiente'].copy()
+        df_view = df.copy() if ver_completados else df[df['Estado_Normalizado'] == 'Pending' or df['Estado_Normalizado'] == 'Pendiente'].copy()
+        # Ajuste para el filtro de vista
+        if not ver_completados:
+            df_view = df[df['Estado_Normalizado'] == 'Pendiente'].copy()
+
         if busc:
             df_view = df_view[df_view.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)]
 
@@ -163,7 +177,6 @@ if df is not None and not df.empty:
                 st.balloons(); st.rerun()
 
     st.divider()
-    # --- GRÁFICOS SÓLO PARA EL EQUIPO ---
     st.subheader("📊 Rendimiento Individual del Equipo")
     g1, g2 = st.columns(2)
     with g1: 
