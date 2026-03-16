@@ -44,9 +44,19 @@ def cargar_datos():
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         
+        # --- LÓGICA DE ESTADO ROBUSTA ---
+        # 1. Si la columna no existe, se crea.
         if 'Estado' not in df.columns: df['Estado'] = 'Pendiente'
-        df['Estado'] = df['Estado'].astype(str).str.strip()
         
+        # 2. Convertimos a texto, quitamos espacios y manejamos vacíos.
+        # Cualquier celda vacía, con espacios o None se convierte en "Pendiente".
+        df['Estado'] = df['Estado'].astype(str).str.strip()
+        df['Estado'] = df['Estado'].apply(lambda x: 'Pendiente' if x in ['', 'None', 'nan'] else x)
+        
+        # 3. Clasificación final para el filtro (Pendiente vs Completado)
+        df['Estado_Normalizado'] = df['Estado'].apply(lambda x: 'Completado' if x.lower() == 'completado' else 'Pendiente')
+        
+        # --- RESTO DE PROCESAMIENTO ---
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
@@ -70,6 +80,7 @@ if df is not None and not df.empty:
 
     st.title("📈 Rendimiento de Montos y Saldos")
 
+    # VELOCÍMETRO
     fig_meta = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = ventas_vendedores_meta,
@@ -104,10 +115,11 @@ if df is not None and not df.empty:
         with c_filt2:
             ver_completados = st.toggle("Ver historial de Completados", value=False)
 
+        # Lógica de Filtro: Ahora basada en la columna normalizada
         if ver_completados:
             df_view = df.copy()
         else:
-            df_view = df[df['Estado'].str.lower().str.contains('pendiente', na=False)].copy()
+            df_view = df[df['Estado_Normalizado'] == 'Pendiente'].copy()
         
         if busc:
             df_view = df_view[df_view.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)]
@@ -117,13 +129,14 @@ if df is not None and not df.empty:
         else:
             for i, r in df_view.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
                 clase = "card-corp" if r['Es_Corp'] else "card-vendedor"
-                est = str(r['Estado']).strip()
+                est_label = str(r['Estado'])
+                
                 st.markdown(f"""
                     <div class="{clase}">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <div style="flex:2;">
                                 <span style="font-size:0.8rem; font-weight:bold; color:#64748b;">📅 {r['Fecha_Creacion'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha_Creacion']) else 'S/F'}</span>
-                                <span class="status-badge">{est}</span><br>
+                                <span class="status-badge">{est_label}</span><br>
                                 <b style="font-size:1.1rem;">{r['Cliente']}</b><br>
                                 <small>Ppto: {r['Nro_Ppto']} | Vendedor: {r['Vendedor']}</small>
                             </div>
@@ -141,9 +154,10 @@ if df is not None and not df.empty:
                     c_bt1, c_bt2 = st.columns(2)
                     if c_bt1.button("💾 Guardar Cambios", key=f"s_{i}"):
                         ws.update_cell(i+2, 4, nt); ws.update_cell(i+2, 5, np); st.rerun()
-                    nuevo_estado = "Completado" if "pendiente" in est.lower() else "Pendiente"
-                    if c_bt2.button("Finalizar/Reabrir", key=f"st_{i}"):
-                        ws.update_cell(i+2, 10, nuevo_estado); st.rerun()
+                    
+                    nuevo_st = "Completado" if r['Estado_Normalizado'] == "Pendiente" else "Pendiente"
+                    if c_bt2.button(f"Pasar a {nuevo_st}", key=f"st_{i}"):
+                        ws.update_cell(i+2, 10, nuevo_st); st.rerun()
 
     with col_r:
         st.subheader("📝 Nuevo Registro")
@@ -158,12 +172,5 @@ if df is not None and not df.empty:
             if st.form_submit_button("REGISTRAR"):
                 ws.append_row([f_fecha.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, "No Facturado", "", "SI" if f_corp else "NO", "Pendiente"])
                 st.balloons(); st.rerun()
-
-    st.divider()
-    st.subheader("📊 Resumen de Rendimiento")
-    g1, g2 = st.columns(2)
-    with g1: st.plotly_chart(px.pie(df_v_total, values='Monto_Total', names='Vendedor', title="Ventas Totales", hole=0.4, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
-    with g2: st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), x='Vendedor', y='Anticipo', title="Cobranza", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
-
 else:
-    st.error("La hoja 'Saldos_Simples' parece estar vacía o no se puede leer.")
+    st.error("Error al cargar la hoja 'Saldos_Simples'. Verifica que existan datos.")
