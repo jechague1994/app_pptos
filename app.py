@@ -9,7 +9,7 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Rendimiento de Montos y Saldos", layout="wide", page_icon="📊")
 
-META_VENTAS = 150000000 
+META_VENTAS = 220000000 
 COLORES_VENDEDORES = {"Jacqueline": "#FFB6C1", "Jonathan": "#ADD8E6", "Roberto": "#98FB98", "Corporativo": "#CBD5E1"}
 
 st.markdown("""
