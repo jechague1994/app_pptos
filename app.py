@@ -8,12 +8,7 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Magallan Dashboard Pro", layout="wide", page_icon="📈")
 
-COLORES_VENDEDORES = {
-    "Jacqueline": "#FFB6C1", 
-    "Jonathan": "#ADD8E6",   
-    "Roberto": "#98FB98",
-    "Corporativo": "#CBD5E1" # Gris azulado pastel para Corp
-}
+COLORES_VENDEDORES = {"Jacqueline": "#FFB6C1", "Jonathan": "#ADD8E6", "Roberto": "#98FB98", "Corporativo": "#CBD5E1"}
 
 st.markdown("""
 <style>
@@ -23,6 +18,7 @@ st.markdown("""
     .card-corp { background-color: #1e293b; color: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #6366f1; }
     .monto-alerta { color: #e11d48; font-weight: 800; font-size: 1.2rem; }
     .monto-corp { color: #818cf8; font-weight: 800; font-size: 1.2rem; }
+    .sub-metrica { font-size: 0.9rem; color: #64748b; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -46,14 +42,11 @@ def cargar_datos():
         ws = sh.worksheet("Saldos_Simples")
         df = pd.DataFrame(ws.get_all_records())
         if 'Estado' not in df.columns: df['Estado'] = 'Pendiente'
-        
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         df['Fecha_Creacion'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce')
         df['Días_Fabricación'] = (datetime.now() - df['Fecha_Creacion']).dt.days.fillna(0).astype(int)
-        
-        # Identificar corporativas por checkbox o por nombre del vendedor
         df['Es_Corp'] = (df['Corporativa'].astype(str).str.upper() == "SI") | (df['Vendedor'].astype(str).str.upper() == "CORPORATIVO")
         return df, ws
     except Exception as e:
@@ -66,66 +59,62 @@ def fmt(n): return f"$ {n:,.0f}".replace(",", ".")
 df, ws = cargar_datos()
 
 if df is not None and not df.empty:
-    st.sidebar.header("🔍 Configuración de Vista")
-    ver_completados = st.sidebar.checkbox("Ver trabajos COMPLETADOS")
-    v_sel = st.sidebar.selectbox("Filtrar Vendedor", ["Todos"] + sorted(list(df['Vendedor'].unique())))
-    modo_grafico = st.sidebar.radio("Gráficos:", ["General (Incluye Corp.)", "Solo Equipo"])
+    st.sidebar.header("🔍 Configuración")
+    ver_completados = st.sidebar.checkbox("Ver Historial (Completados)")
     
     df['Estado_Limpio'] = df['Estado'].apply(lambda x: 'Completado' if str(x).strip() == 'Completado' else 'Pendiente')
     estado_filtro = 'Completado' if ver_completados else 'Pendiente'
-    
-    # Base filtrada por estado
     df_base = df[df['Estado_Limpio'] == estado_filtro].copy()
-    
+
     st.title("📊 Magallan Intelligence Pro")
 
-    # MÉTRICAS GENERALES (Siempre visibles)
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.metric("VENTAS TOTALES", fmt(df_base['Monto_Total'].sum()))
-    with m2:
-        st.metric("SALDO PENDIENTE COBRO", fmt(df_base['Saldo'].sum()))
-    with m3:
-        st.metric("CANT. PEDIDOS", len(df_base))
+    # --- SECCIÓN DE MÉTRICAS (Basado en tu imagen) ---
+    df_v = df_base[df_base['Es_Corp'] == False]
+    df_c = df_base[df_base['Es_Corp'] == True]
+
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.subheader("👥 Equipo Ventas")
+        st.metric("Ventas Totales", fmt(df_v['Monto_Total'].sum()))
+        st.markdown(f"<p class='sub-metrica'>Cobrado: {fmt(df_v['Anticipo'].sum())}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='sub-metrica' style='color:#e11d48'>Saldo Pendiente: {fmt(df_v['Saldo'].sum())}</p>", unsafe_allow_html=True)
+
+    with c2:
+        st.subheader("🏢 Corporativos")
+        st.metric("Ventas Totales", fmt(df_c['Monto_Total'].sum()))
+        st.markdown(f"<p class='sub-metrica'>Cobrado: {fmt(df_c['Anticipo'].sum())}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='sub-metrica' style='color:#6366f1'>Saldo Pendiente: {fmt(df_c['Saldo'].sum())}</p>", unsafe_allow_html=True)
+
+    with c3:
+        st.subheader("🌍 Total General")
+        st.metric("Ventas Globales", fmt(df_base['Monto_Total'].sum()))
+        st.markdown(f"<p class='sub-metrica'>Cobrado Total: {fmt(df_base['Anticipo'].sum())}</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='sub-metrica' style='font-weight:bold; color:black'>Saldo Global: {fmt(df_base['Saldo'].sum())}</p>", unsafe_allow_html=True)
 
     st.divider()
 
-    # --- GRÁFICOS ---
-    if modo_grafico == "Solo Equipo":
-        df_graficos = df_base[df_base['Es_Corp'] == False].copy()
-        st.subheader("📈 Rendimiento de Equipo (Vendedores)")
-    else:
-        df_graficos = df_base.copy()
-        st.subheader("📈 Volumen Total de Operaciones")
-
-    if v_sel != "Todos":
-        df_graficos = df_graficos[df_graficos['Vendedor'] == v_sel]
-
+    # --- GRÁFICOS (Solo Vendedores) ---
+    st.subheader("📈 Rendimiento Vendedores (Sin Corp.)")
     g1, g2, g3 = st.columns(3)
     with g1:
-        st.plotly_chart(px.pie(df_graficos, values='Monto_Total', names='Vendedor', title="Cuota de Ventas", hole=0.5, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+        st.plotly_chart(px.pie(df_v, values='Monto_Total', names='Vendedor', title="Cuota Ventas", hole=0.5, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
     with g2:
-        st.plotly_chart(px.pie(df_graficos, values='Monto_Total', names='Facturado', title="Estado Facturación", color='Facturado', color_discrete_map={"Facturado": "#A7F3D0", "No Facturado": "#FCA5A5"}), use_container_width=True)
+        st.plotly_chart(px.pie(df_v, values='Monto_Total', names='Facturado', title="Estado Facturación", color='Facturado', color_discrete_map={"Facturado": "#A7F3D0", "No Facturado": "#FCA5A5"}), use_container_width=True)
     with g3:
-        df_rank = df_graficos.groupby('Vendedor')['Anticipo'].sum().reset_index()
-        st.plotly_chart(px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', title="Ranking Recaudación", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+        df_rank = df_v.groupby('Vendedor')['Anticipo'].sum().reset_index()
+        st.plotly_chart(px.bar(df_rank, y='Vendedor', x='Anticipo', orientation='h', title="Recaudación Vendedores", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
     st.divider()
 
-    # --- OPERATIVA ---
+    # --- LISTA Y EDICIÓN ---
     col_l, col_r = st.columns([1.7, 1.3])
-
     with col_l:
-        st.subheader("📑 Gestión de Cartera")
+        st.subheader("📑 Cartera Pendiente")
         busc = st.text_input("🔍 Buscar cliente...")
+        df_display = df_base[df_base.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_base
         
-        df_lista = df_base.copy()
-        if v_sel != "Todos":
-            df_lista = df_lista[df_lista['Vendedor'] == v_sel]
-        
-        df_v = df_lista[df_lista.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)] if busc else df_lista
-        
-        for i, r in df_v.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
+        for i, r in df_display.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
             dias_f = int(r['Días_Fabricación'])
             clase = "card-corp" if r['Es_Corp'] else ("card-demora" if dias_f > 15 else "card-vendedor")
             monto_clase = "monto-corp" if r['Es_Corp'] else "monto-alerta"
@@ -134,7 +123,7 @@ if df is not None and not df.empty:
                 <div class="{clase}">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
                         <div style="flex:2;">
-                            <b>{r['Cliente']}</b> {' [CORP]' if r['Es_Corp'] else ''} {'✅' if r['Estado_Limpio'] == 'Completado' else ''}<br>
+                            <b>{r['Cliente']}</b> {' [CORP]' if r['Es_Corp'] else ''}<br>
                             <small>Ppto: {r['Nro_Ppto']} | {r['Vendedor']}</small><br>
                             <small>{'⚠️ DEMORA: ' + str(dias_f) + ' DÍAS' if dias_f > 15 else 'Hace ' + str(dias_f) + ' días'}</small>
                         </div>
@@ -156,8 +145,8 @@ if df is not None and not df.empty:
                         ws.update_cell(i+2, 5, n_pago)
                         st.rerun()
                 with c2:
-                    label = "⏪ Reabrir" if r['Estado_Limpio'] == 'Completado' else "🏁 Completar"
-                    nuevo_st = "Pendiente" if r['Estado_Limpio'] == 'Completado' else "Completado"
+                    label = "⏪ Reabrir" if ver_completados else "🏁 Completar"
+                    nuevo_st = "Pendiente" if ver_completados else "Completado"
                     if st.button(label, key=f"st_{i}"):
                         ws.update_cell(i+2, 10, nuevo_st) 
                         st.rerun()
