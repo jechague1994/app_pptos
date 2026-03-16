@@ -18,9 +18,8 @@ st.markdown("""
     .card-vendedor { background-color: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #3b82f6; box-shadow: 0 2px 5px rgba(0,0,0,0.08); }
     .card-corp { background-color: #1e293b; color: white; border-radius: 10px; padding: 18px; margin-bottom: 12px; border-left: 6px solid #6366f1; }
     .monto-alerta { color: #e11d48; font-weight: 800; font-size: 1.2rem; }
-    .sub-metrica { font-size: 0.9rem; color: #64748b; font-weight: 600; margin-bottom: 2px; }
-    .fecha-tag { color: #64748b; font-size: 0.8rem; font-weight: bold; }
-    .status-badge { font-size: 0.7rem; padding: 2px 6px; border-radius: 5px; background: #e2e8f0; color: #475569; margin-left: 10px; }
+    .sub-metrica { font-size: 0.9rem; color: #64748b; font-weight: 600; }
+    .status-badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 12px; background: #f1f5f9; color: #475569; font-weight: bold; border: 1px solid #cbd5e1; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -42,13 +41,19 @@ def cargar_datos():
     try:
         sh = gc.open("Gestion_Magallan")
         ws = sh.worksheet("Saldos_Simples")
-        df = pd.DataFrame(ws.get_all_records())
+        data = ws.get_all_records()
+        df = pd.DataFrame(data)
+        
+        # Limpieza de columnas críticas
         if 'Estado' not in df.columns: df['Estado'] = 'Pendiente'
+        df['Estado'] = df['Estado'].astype(str).str.strip() # Quita espacios
+        
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
         df['Saldo'] = df['Monto_Total'] - df['Anticipo']
         df['Fecha_Creacion'] = pd.to_datetime(df['Fecha_Creacion'], errors='coerce')
-        df['Es_Corp'] = (df['Corporativa'].astype(str).str.upper() == "SI") | (df['Vendedor'].astype(str).str.upper() == "CORPORATIVO")
+        df['Es_Corp'] = (df['Corporativa'].astype(str).str.upper().str.strip() == "SI") | (df['Vendedor'].astype(str).str.upper().str.strip() == "CORPORATIVO")
+        
         return df, ws
     except Exception as e:
         st.error(f"Error cargando Excel: {e}")
@@ -60,108 +65,111 @@ def fmt(n): return f"$ {n:,.0f}".replace(",", ".")
 df, ws = cargar_datos()
 
 if df is not None and not df.empty:
-    st.sidebar.header("🔍 Opciones de Lista")
-    ver_completados = st.sidebar.checkbox("Incluir Trabajos Completados")
-    
-    # DATOS PARA MÉTRICAS (Siempre todo)
+    # Métricas Globales (Independientes de la lista)
     df_v_total = df[df['Es_Corp'] == False]
     df_c_total = df[df['Es_Corp'] == True]
     ventas_vendedores_meta = df_v_total['Monto_Total'].sum()
 
     st.title("📈 Rendimiento de Montos y Saldos")
 
-    # --- INDICADOR DE META ---
+    # VELOCÍMETRO
     fig_meta = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = ventas_vendedores_meta,
         title = {'text': "Meta Equipo (Acumulado Mensual)", 'font': {'size': 18}},
         delta = {'reference': META_VENTAS, 'increasing': {'color': "green"}},
-        gauge = {
-            'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'},
-            'bar': {'color': "#3b82f6"},
-            'steps': [
-                {'range': [0, META_VENTAS*0.5], 'color': "#fee2e2"},
-                {'range': [META_VENTAS*0.5, META_VENTAS*0.8], 'color': "#fef9c3"},
-                {'range': [META_VENTAS*0.8, META_VENTAS], 'color': "#dcfce7"}]}))
+        gauge = {'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'}, 'bar': {'color': "#3b82f6"}}))
     fig_meta.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
     st.plotly_chart(fig_meta, use_container_width=True)
 
-    # --- MÉTRICAS SUPERIORES ---
-    c1, c2, c3 = st.columns(3)
-    with c1:
+    # MÉTRICAS 3 COLUMNAS
+    m1, m2, m3 = st.columns(3)
+    with m1:
         st.subheader("👥 Equipo Ventas")
         st.metric("Ventas Totales", fmt(ventas_vendedores_meta))
-        st.markdown(f"<p class='sub-metrica'>Saldo Pendiente: <span style='color:#e11d48'>{fmt(df_v_total['Saldo'].sum())}</span></p>", unsafe_allow_html=True)
-    with c2:
+        st.markdown(f"<p class='sub-metrica'>Saldo: <span style='color:#e11d48'>{fmt(df_v_total['Saldo'].sum())}</span></p>", unsafe_allow_html=True)
+    with m2:
         st.subheader("🏢 Corporativos")
         st.metric("Ventas Totales", fmt(df_c_total['Monto_Total'].sum()))
-        st.markdown(f"<p class='sub-metrica'>Saldo Pendiente: <span style='color:#6366f1'>{fmt(df_c_total['Saldo'].sum())}</span></p>", unsafe_allow_html=True)
-    with c3:
+        st.markdown(f"<p class='sub-metrica'>Saldo: <span style='color:#6366f1'>{fmt(df_c_total['Saldo'].sum())}</span></p>", unsafe_allow_html=True)
+    with m3:
         st.subheader("🌍 Total Empresa")
         st.metric("Ventas Globales", fmt(df['Monto_Total'].sum()))
         st.markdown(f"<p class='sub-metrica'>Deuda Global: <b>{fmt(df['Saldo'].sum())}</b></p>", unsafe_allow_html=True)
 
     st.divider()
 
-    # --- LISTA DE TRABAJOS ---
+    # LISTA Y REGISTRO
     col_l, col_r = st.columns([1.7, 1.3])
     with col_l:
         st.subheader("📑 Cartera de Presupuestos")
-        busc = st.text_input("🔍 Buscar cliente o ppto...")
         
-        # FILTRO DE LA LISTA: Si no marca el check, solo ve Pendientes. Si lo marca, ve ambos.
+        # Filtros de la lista
+        c_filt1, c_filt2 = st.columns(2)
+        with c_filt1:
+            busc = st.text_input("🔍 Buscar cliente o ppto...")
+        with c_filt2:
+            ver_completados = st.toggle("Ver historial de Completados", value=False)
+
+        # Lógica de Filtrado de la Vista
+        # Normalizamos a minúsculas para que no falle por "Pendiente" vs "pendiente"
         if ver_completados:
             df_view = df.copy()
         else:
-            df_view = df[df['Estado'].astype(str).str.strip() == "Pendiente"].copy()
+            # Filtro robusto: busca cualquier variación de la palabra 'pendiente'
+            df_view = df[df['Estado'].str.lower().str.contains('pendiente', na=False)].copy()
         
         if busc:
             df_view = df_view[df_view.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)]
-        
-        for i, r in df_view.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
-            fecha_str = r['Fecha_Creacion'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha_Creacion']) else "S/F"
-            clase = "card-corp" if r['Es_Corp'] else "card-vendedor"
-            is_done = r['Estado'].astype(str).strip() == "Completado"
-            
-            st.markdown(f"""
-                <div class="{clase}">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div style="flex:2;">
-                            <span class="fecha-tag">📅 {fecha_str}</span>
-                            <span class="status-badge">{'✅ ' if is_done else '⏳ '}{r['Estado']}</span><br>
-                            <b style="font-size:1.1rem;">{r['Cliente']}</b> {' [CORP]' if r['Es_Corp'] else ''}<br>
-                            <small>Ppto: {r['Nro_Ppto']} | Vendedor: {r['Vendedor']}</small>
-                        </div>
-                        <div style="text-align:right;">
-                            <small>Total: {fmt(r['Monto_Total'])}</small><br>
-                            <span class="monto-alerta">Saldo: {fmt(r['Saldo'])}</span>
+
+        # Mostrar tarjetas
+        if df_view.empty:
+            st.info("No hay presupuestos pendientes para mostrar. Activa 'Ver historial' o registra uno nuevo.")
+        else:
+            for i, r in df_view.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
+                clase = "card-corp" if r['Es_Corp'] else "card-vendedor"
+                est = str(r['Estado']).strip()
+                
+                st.markdown(f"""
+                    <div class="{clase}">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="flex:2;">
+                                <span style="font-size:0.8rem; font-weight:bold; color:#64748b;">📅 {r['Fecha_Creacion'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha_Creacion']) else 'S/F'}</span>
+                                <span class="status-badge">{est}</span><br>
+                                <b style="font-size:1.1rem;">{r['Cliente']}</b> {' [CORP]' if r['Es_Corp'] else ''}<br>
+                                <small>Ppto: {r['Nro_Ppto']} | Vendedor: {r['Vendedor']}</small>
+                            </div>
+                            <div style="text-align:right;">
+                                <small>Total: {fmt(r['Monto_Total'])}</small><br>
+                                <span class="monto-alerta">Saldo: {fmt(r['Saldo'])}</span>
+                            </div>
                         </div>
                     </div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            with st.expander(f"Editar {r['Cliente']}"):
-                nt = st.number_input("Monto Total:", value=float(r['Monto_Total']), key=f"t_{i}")
-                np = st.number_input("Cobrado:", value=float(r['Anticipo']), key=f"p_{i}")
-                c_bt1, c_bt2 = st.columns(2)
-                if c_bt1.button("💾 Guardar", key=f"s_{i}"):
-                    ws.update_cell(i+2, 4, nt); ws.update_cell(i+2, 5, np); st.rerun()
+                """, unsafe_allow_html=True)
                 
-                label_btn = "⏪ Reabrir Trabajo" if is_done else "🏁 Finalizar Trabajo"
-                nuevo_st = "Pendiente" if is_done else "Completado"
-                if c_bt2.button(label_btn, key=f"st_{i}"):
-                    ws.update_cell(i+2, 10, nuevo_st); st.rerun()
+                with st.expander(f"Gestionar {r['Cliente']}"):
+                    nt = st.number_input("Total:", value=float(r['Monto_Total']), key=f"t_{i}")
+                    np = st.number_input("Cobrado:", value=float(r['Anticipo']), key=f"p_{i}")
+                    c_bt1, c_bt2 = st.columns(2)
+                    if c_bt1.button("💾 Guardar Cambios", key=f"s_{i}"):
+                        ws.update_cell(i+2, 4, nt); ws.update_cell(i+2, 5, np); st.rerun()
+                    
+                    # Botón dinámico según el estado actual
+                    nuevo_estado = "Completado" if "pendiente" in est.lower() else "Pendiente"
+                    label_btn = "🏁 Finalizar" if nuevo_estado == "Completado" else "⏪ Reabrir"
+                    if c_bt2.button(label_btn, key=f"st_{i}"):
+                        ws.update_cell(i+2, 10, nuevo_estado); st.rerun()
 
     with col_r:
         st.subheader("📝 Nuevo Registro")
         with st.form("alta", clear_on_submit=True):
             f_fecha = st.date_input("Fecha", datetime.now())
-            f_ppto = st.text_input("Nro Presupuesto")
+            f_ppto = st.text_input("Nro Ppto")
             f_cli = st.text_input("Cliente")
             f_ven = st.selectbox("Vendedor", ["Jacqueline", "Jonathan", "Roberto", "Corporativo"])
             f_tot = st.number_input("Monto Total $", min_value=0.0)
             f_ant = st.number_input("Anticipo $", min_value=0.0)
-            f_corp = st.checkbox("¿Cuenta Corporativa?")
+            f_corp = st.checkbox("¿Es Corporativa?")
             if st.form_submit_button("REGISTRAR"):
                 ws.append_row([f_fecha.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, "No Facturado", "", "SI" if f_corp else "NO", "Pendiente"])
                 st.balloons(); st.rerun()
@@ -173,4 +181,4 @@ if df is not None and not df.empty:
     with g2: st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), x='Vendedor', y='Anticipo', title="Cobranza Realizada", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
 else:
-    st.warning("No hay datos en 'Saldos_Simples'.")
+    st.error("Error: La hoja 'Saldos_Simples' parece estar vacía o no se puede leer."
