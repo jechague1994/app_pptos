@@ -9,7 +9,7 @@ from datetime import datetime
 # --- 1. CONFIGURACIÓN VISUAL ---
 st.set_page_config(page_title="Rendimiento de Montos y Saldos", layout="wide", page_icon="📊")
 
-META_VENTAS = 220000000 
+META_VENTAS = 250000000 
 COLORES_VENDEDORES = {"Jacqueline": "#FFB6C1", "Jonathan": "#ADD8E6", "Roberto": "#98FB98", "Corporativo": "#CBD5E1"}
 
 st.markdown("""
@@ -70,41 +70,30 @@ if df is not None and not df.empty:
     df_v_total = df[df['Es_Corp'] == False]
     df_c_total = df[df['Es_Corp'] == True]
     
-    # Valores para métricas
-    ventas_equipo = df_v_total['Monto_Total'].sum()
-    ventas_corp = df_c_total['Monto_Total'].sum()
-    ventas_globales = df['Monto_Total'].sum() # SUMA TOTAL
+    # Valores para métricas y velocímetro (Suma todo)
+    ventas_globales = df['Monto_Total'].sum() 
 
     st.title("📈 Rendimiento de Montos y Saldos")
 
-    # VELOCÍMETRO (AHORA USA ventas_globales)
+    # VELOCÍMETRO (Meta Global 150M)
     fig_meta = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = ventas_globales,
-        title = {'text': "Meta Global (Equipo + Corporativos)", 'font': {'size': 18}},
+        title = {'text': "Meta Global (Equipo + Corp)", 'font': {'size': 18}},
         delta = {'reference': META_VENTAS, 'increasing': {'color': "green"}},
-        gauge = {
-            'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'},
-            'bar': {'color': "#3b82f6"},
-            'steps': [
-                {'range': [0, META_VENTAS*0.5], 'color': "#fee2e2"},
-                {'range': [META_VENTAS*0.5, META_VENTAS*0.8], 'color': "#fef9c3"},
-                {'range': [META_VENTAS*0.8, META_VENTAS], 'color': "#dcfce7"}
-            ]
-        }
+        gauge = {'axis': {'range': [None, META_VENTAS], 'tickformat': '$,.0f'}, 'bar': {'color': "#3b82f6"}}
     ))
     fig_meta.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
     st.plotly_chart(fig_meta, use_container_width=True)
 
-    # MÉTRICAS 3 COLUMNAS
     m1, m2, m3 = st.columns(3)
     with m1:
         st.subheader("👥 Equipo Ventas")
-        st.metric("Subtotal", fmt(ventas_equipo))
+        st.metric("Subtotal", fmt(df_v_total['Monto_Total'].sum()))
         st.markdown(f"<p class='sub-metrica'>Saldo: <span style='color:#e11d48'>{fmt(df_v_total['Saldo'].sum())}</span></p>", unsafe_allow_html=True)
     with m2:
         st.subheader("🏢 Corporativos")
-        st.metric("Subtotal", fmt(ventas_corp))
+        st.metric("Subtotal", fmt(df_c_total['Monto_Total'].sum()))
         st.markdown(f"<p class='sub-metrica'>Saldo: <span style='color:#6366f1'>{fmt(df_c_total['Saldo'].sum())}</span></p>", unsafe_allow_html=True)
     with m3:
         st.subheader("🌍 Acumulado Real")
@@ -113,7 +102,7 @@ if df is not None and not df.empty:
 
     st.divider()
 
-    # CARTERA DE PRESUPUESTOS
+    # CARTERA
     col_l, col_r = st.columns([1.7, 1.3])
     with col_l:
         st.subheader("📑 Cartera de Presupuestos")
@@ -152,12 +141,11 @@ if df is not None and not df.empty:
                 with st.expander(f"Gestionar {r['Cliente']}"):
                     nt = st.number_input("Total:", value=float(r['Monto_Total']), key=f"t_{i}")
                     np = st.number_input("Cobrado:", value=float(r['Anticipo']), key=f"p_{i}")
-                    c_bt1, c_bt2 = st.columns(2)
-                    if c_bt1.button("💾 Guardar", key=f"s_{i}"):
+                    if st.button("💾 Guardar", key=f"s_{i}"):
                         ws.update_cell(i+2, 4, nt); ws.update_cell(i+2, 5, np); st.rerun()
                     
                     nuevo_st = "Completado" if r['Estado_Normalizado'] == "Pendiente" else "Pendiente"
-                    if c_bt2.button(f"Pasar a {nuevo_st}", key=f"st_{i}"):
+                    if st.button(f"Pasar a {nuevo_st}", key=f"st_{i}"):
                         ws.update_cell(i+2, 10, nuevo_st); st.rerun()
 
     with col_r:
@@ -175,10 +163,17 @@ if df is not None and not df.empty:
                 st.balloons(); st.rerun()
 
     st.divider()
-    st.subheader("📊 Análisis por Vendedor")
+    # --- GRÁFICOS SÓLO PARA EL EQUIPO ---
+    st.subheader("📊 Rendimiento Individual del Equipo")
     g1, g2 = st.columns(2)
-    with g1: st.plotly_chart(px.pie(df, values='Monto_Total', names='Vendedor', title="Participación en Ventas (Global)", hole=0.4, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
-    with g2: st.plotly_chart(px.bar(df.groupby('Vendedor')['Anticipo'].sum().reset_index(), x='Vendedor', y='Anticipo', title="Cobranza Efectiva", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+    with g1: 
+        st.plotly_chart(px.pie(df_v_total, values='Monto_Total', names='Vendedor', 
+                               title="Participación en Ventas (Equipo)", hole=0.4, 
+                               color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+    with g2: 
+        st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), 
+                               x='Vendedor', y='Anticipo', title="Ranking de Cobranza (Equipo)", 
+                               color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
 else:
-    st.error("No se detectaron datos en la hoja.")
+    st.error("No hay datos cargados.")
