@@ -44,9 +44,8 @@ def cargar_datos():
         data = ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # Limpieza de columnas críticas
         if 'Estado' not in df.columns: df['Estado'] = 'Pendiente'
-        df['Estado'] = df['Estado'].astype(str).str.strip() # Quita espacios
+        df['Estado'] = df['Estado'].astype(str).str.strip()
         
         df['Monto_Total'] = pd.to_numeric(df['Monto_Total'], errors='coerce').fillna(0)
         df['Anticipo'] = pd.to_numeric(df['Anticipo'], errors='coerce').fillna(0)
@@ -65,14 +64,12 @@ def fmt(n): return f"$ {n:,.0f}".replace(",", ".")
 df, ws = cargar_datos()
 
 if df is not None and not df.empty:
-    # Métricas Globales (Independientes de la lista)
     df_v_total = df[df['Es_Corp'] == False]
     df_c_total = df[df['Es_Corp'] == True]
     ventas_vendedores_meta = df_v_total['Monto_Total'].sum()
 
     st.title("📈 Rendimiento de Montos y Saldos")
 
-    # VELOCÍMETRO
     fig_meta = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = ventas_vendedores_meta,
@@ -82,7 +79,6 @@ if df is not None and not df.empty:
     fig_meta.update_layout(height=230, margin=dict(l=20, r=20, t=50, b=20))
     st.plotly_chart(fig_meta, use_container_width=True)
 
-    # MÉTRICAS 3 COLUMNAS
     m1, m2, m3 = st.columns(3)
     with m1:
         st.subheader("👥 Equipo Ventas")
@@ -99,44 +95,36 @@ if df is not None and not df.empty:
 
     st.divider()
 
-    # LISTA Y REGISTRO
     col_l, col_r = st.columns([1.7, 1.3])
     with col_l:
         st.subheader("📑 Cartera de Presupuestos")
-        
-        # Filtros de la lista
         c_filt1, c_filt2 = st.columns(2)
         with c_filt1:
             busc = st.text_input("🔍 Buscar cliente o ppto...")
         with c_filt2:
             ver_completados = st.toggle("Ver historial de Completados", value=False)
 
-        # Lógica de Filtrado de la Vista
-        # Normalizamos a minúsculas para que no falle por "Pendiente" vs "pendiente"
         if ver_completados:
             df_view = df.copy()
         else:
-            # Filtro robusto: busca cualquier variación de la palabra 'pendiente'
             df_view = df[df['Estado'].str.lower().str.contains('pendiente', na=False)].copy()
         
         if busc:
             df_view = df_view[df_view.apply(lambda r: busc.lower() in str(r.values).lower(), axis=1)]
 
-        # Mostrar tarjetas
         if df_view.empty:
-            st.info("No hay presupuestos pendientes para mostrar. Activa 'Ver historial' o registra uno nuevo.")
+            st.info("No hay presupuestos para mostrar.")
         else:
             for i, r in df_view.sort_values(by='Fecha_Creacion', ascending=False).iterrows():
                 clase = "card-corp" if r['Es_Corp'] else "card-vendedor"
                 est = str(r['Estado']).strip()
-                
                 st.markdown(f"""
                     <div class="{clase}">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <div style="flex:2;">
                                 <span style="font-size:0.8rem; font-weight:bold; color:#64748b;">📅 {r['Fecha_Creacion'].strftime('%d/%m/%Y') if pd.notnull(r['Fecha_Creacion']) else 'S/F'}</span>
                                 <span class="status-badge">{est}</span><br>
-                                <b style="font-size:1.1rem;">{r['Cliente']}</b> {' [CORP]' if r['Es_Corp'] else ''}<br>
+                                <b style="font-size:1.1rem;">{r['Cliente']}</b><br>
                                 <small>Ppto: {r['Nro_Ppto']} | Vendedor: {r['Vendedor']}</small>
                             </div>
                             <div style="text-align:right;">
@@ -153,11 +141,8 @@ if df is not None and not df.empty:
                     c_bt1, c_bt2 = st.columns(2)
                     if c_bt1.button("💾 Guardar Cambios", key=f"s_{i}"):
                         ws.update_cell(i+2, 4, nt); ws.update_cell(i+2, 5, np); st.rerun()
-                    
-                    # Botón dinámico según el estado actual
                     nuevo_estado = "Completado" if "pendiente" in est.lower() else "Pendiente"
-                    label_btn = "🏁 Finalizar" if nuevo_estado == "Completado" else "⏪ Reabrir"
-                    if c_bt2.button(label_btn, key=f"st_{i}"):
+                    if c_bt2.button("Finalizar/Reabrir", key=f"st_{i}"):
                         ws.update_cell(i+2, 10, nuevo_estado); st.rerun()
 
     with col_r:
@@ -167,8 +152,8 @@ if df is not None and not df.empty:
             f_ppto = st.text_input("Nro Ppto")
             f_cli = st.text_input("Cliente")
             f_ven = st.selectbox("Vendedor", ["Jacqueline", "Jonathan", "Roberto", "Corporativo"])
-            f_tot = st.number_input("Monto Total $", min_value=0.0)
-            f_ant = st.number_input("Anticipo $", min_value=0.0)
+            f_tot = st.number_input("Monto Total", min_value=0.0)
+            f_ant = st.number_input("Anticipo", min_value=0.0)
             f_corp = st.checkbox("¿Es Corporativa?")
             if st.form_submit_button("REGISTRAR"):
                 ws.append_row([f_fecha.strftime("%Y-%m-%d"), f_ppto, f_cli, f_tot, f_ant, f_ven, "No Facturado", "", "SI" if f_corp else "NO", "Pendiente"])
@@ -177,8 +162,8 @@ if df is not None and not df.empty:
     st.divider()
     st.subheader("📊 Resumen de Rendimiento")
     g1, g2 = st.columns(2)
-    with g1: st.plotly_chart(px.pie(df_v_total, values='Monto_Total', names='Vendedor', title="Cuota de Ventas Totales", hole=0.4, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
-    with g2: st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), x='Vendedor', y='Anticipo', title="Cobranza Realizada", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+    with g1: st.plotly_chart(px.pie(df_v_total, values='Monto_Total', names='Vendedor', title="Ventas Totales", hole=0.4, color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
+    with g2: st.plotly_chart(px.bar(df_v_total.groupby('Vendedor')['Anticipo'].sum().reset_index(), x='Vendedor', y='Anticipo', title="Cobranza", color='Vendedor', color_discrete_map=COLORES_VENDEDORES), use_container_width=True)
 
 else:
-    st.error("Error: La hoja 'Saldos_Simples' parece estar vacía o no se puede leer."
+    st.error("La hoja 'Saldos_Simples' parece estar vacía o no se puede leer.")
